@@ -1,0 +1,5 @@
+networks:
+  data-processing-network:
+    external: false
+    name: spark-local-network
+    driver: bridge
