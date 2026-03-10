@@ -44,7 +44,6 @@ def remove_salt_columns(df: DataFrame) -> DataFrame:
 def main():
     spark = SparkSession.builder \
         .appName("SaltedJoin") \
-        .master("local[*]") \
         .getOrCreate()
 
     # Create a large skewed DataFrame (id=1 appears ~80%)

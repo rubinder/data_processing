@@ -27,3 +27,4 @@ Complete the following under different folders
         - [x] Should deploy the code under web_server_code locally
     - [x] Under web_server_aws
         - [x] Should deploy the code under web_server_code to AWS using a shell script
+    - [x] Add a README.md to each directory describing how to run scripts, launch Dockerfiles, and what each directory does
