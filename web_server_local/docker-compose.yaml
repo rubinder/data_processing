@@ -1,0 +1,23 @@
+services:
+  web-server:
+    build:
+      context: ../web_server_code
+      dockerfile: ../web_server_local/Dockerfile
+    container_name: web-server
+    hostname: web-server
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - data-processing-network
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

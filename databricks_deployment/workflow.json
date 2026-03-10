@@ -1,0 +1,107 @@
+{
+  "name": "data_processing_workflow",
+  "email_notifications": {
+    "no_alert_for_skipped_runs": false
+  },
+  "webhook_notifications": {},
+  "timeout_seconds": 0,
+  "max_concurrent_runs": 1,
+  "job_clusters": [
+    {
+      "job_cluster_key": "data_processing_cluster",
+      "new_cluster": {
+        "spark_version": "17.3.x-scala2.12",
+        "num_workers": 2,
+        "node_type_id": "i3.xlarge",
+        "spark_conf": {
+          "spark.sql.shuffle.partitions": "8"
+        },
+        "spark_env_vars": {
+          "API_BASE_URL": "{{secrets/data-processing/api_base_url}}"
+        }
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task_key": "api_pull",
+      "description": "Pull impression data from API and save to Delta table",
+      "job_cluster_key": "data_processing_cluster",
+      "spark_python_task": {
+        "python_file": "dbfs:/spark_applications/spark_applications/api_pull.py",
+        "parameters": [
+          "--mode", "databricks",
+          "--page_type", "{{job.parameters.page_type}}",
+          "--date", "{{job.parameters.date}}",
+          "--hour", "{{job.parameters.hour}}"
+        ]
+      },
+      "libraries": [
+        {
+          "pypi": {
+            "package": "requests>=2.31.0"
+          }
+        },
+        {
+          "pypi": {
+            "package": "python-dotenv>=1.0.0"
+          }
+        }
+      ],
+      "timeout_seconds": 1800,
+      "max_retries": 1
+    },
+    {
+      "task_key": "aggregation",
+      "description": "Aggregate impression data by user_id, impression_id, page_type",
+      "depends_on": [
+        {
+          "task_key": "api_pull"
+        }
+      ],
+      "job_cluster_key": "data_processing_cluster",
+      "spark_python_task": {
+        "python_file": "dbfs:/spark_applications/spark_applications/aggregation.py",
+        "parameters": [
+          "--mode", "databricks",
+          "--date", "{{job.parameters.date}}",
+          "--hour", "{{job.parameters.hour}}"
+        ]
+      },
+      "libraries": [
+        {
+          "pypi": {
+            "package": "python-dotenv>=1.0.0"
+          }
+        }
+      ],
+      "timeout_seconds": 1800,
+      "max_retries": 1
+    },
+    {
+      "task_key": "hello_world",
+      "description": "Simple hello world validation task",
+      "job_cluster_key": "data_processing_cluster",
+      "spark_python_task": {
+        "python_file": "dbfs:/spark_applications/spark_applications/hello_world.py"
+      },
+      "timeout_seconds": 600,
+      "max_retries": 0
+    }
+  ],
+  "parameters": [
+    {
+      "name": "page_type",
+      "default": "1"
+    },
+    {
+      "name": "date",
+      "default": "2026-01-01"
+    },
+    {
+      "name": "hour",
+      "default": "10"
+    }
+  ],
+  "format": "MULTI_TASK"
+}
