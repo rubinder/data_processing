@@ -1,0 +1,15 @@
+[project]
+name = "airflow-deployment"
+version = "0.1.0"
+description = "Docker-based Airflow 2.11.1 deployment with local Spark and AWS EMR integration"
+requires-python = ">=3.10"
+dependencies = [
+    "apache-airflow==2.11.1",
+    "apache-airflow-providers-apache-spark>=4.11.0",
+    "apache-airflow-providers-amazon>=9.5.0",
+    "pyspark==3.5.4",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

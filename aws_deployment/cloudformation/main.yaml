@@ -1,0 +1,542 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Data processing pipeline - S3 landing, Lambda, Step Function, Batch, Glue, EMR, DynamoDB
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: data-processing
+    Description: Project name used as prefix for resource names
+
+  DeploymentBucket:
+    Type: String
+    Description: S3 bucket containing deployment artifacts (Lambda zip, Glue scripts)
+
+  LambdaS3Key:
+    Type: String
+    Default: deployment/lambda.zip
+    Description: S3 key for Lambda deployment package
+
+  GlueScriptS3Key:
+    Type: String
+    Default: deployment/etl_job.py
+    Description: S3 key for Glue ETL script
+
+  BatchJobImage:
+    Type: String
+    Description: ECR image URI for the Batch encoding check job
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for Batch compute environment
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs for Batch compute environment and EMR cluster
+
+  EmrKeyPair:
+    Type: String
+    Default: ""
+    Description: EC2 key pair name for EMR instances (optional)
+
+Resources:
+  # ============================================================
+  # S3 Buckets
+  # ============================================================
+
+  DataLandingBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: LambdaInvokePermission
+    Properties:
+      BucketName: !Sub "${ProjectName}-landing-${AWS::AccountId}"
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt TriggerStepFunctionLambda.Arn
+
+  ProcessedDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-processed-${AWS::AccountId}"
+
+  # ============================================================
+  # IAM Roles
+  # ============================================================
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: StepFunctionStartExecution
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref DataProcessingStateMachine
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+
+  StepFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-sfn-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StepFunctionPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - batch:SubmitJob
+                  - batch:DescribeJobs
+                  - batch:TerminateJob
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - glue:StartCrawler
+                  - glue:GetCrawler
+                  - glue:StartJobRun
+                  - glue:GetJobRun
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForBatchJobsRule"
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForGlueJobRunsRule"
+
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-glue-crawler-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+
+  GlueETLJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-glue-etl-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3ReadWriteAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}/*"
+        - PolicyName: GlueScriptAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${DeploymentBucket}/${GlueScriptS3Key}"
+
+  BatchJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-batch-job-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: S3ReadAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+
+  EMRServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-emr-service-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: elasticmapreduce.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEMRServicePolicy_v2
+
+  EMRInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-emr-instance-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonElasticMapReduceforEC2Role
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}/*"
+
+  EMRInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-emr-instance-profile"
+      Roles:
+        - !Ref EMRInstanceRole
+
+  # ============================================================
+  # Lambda
+  # ============================================================
+
+  TriggerStepFunctionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-trigger-sfn"
+      Runtime: python3.10
+      Handler: trigger_step_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key: !Ref LambdaS3Key
+      Timeout: 60
+      MemorySize: 128
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref DataProcessingStateMachine
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt TriggerStepFunctionLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+
+  # ============================================================
+  # Step Function
+  # ============================================================
+
+  DataProcessingStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Sub "${ProjectName}-pipeline"
+      RoleArn: !GetAtt StepFunctionExecutionRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "Data processing pipeline: encoding check -> crawler -> ETL",
+          "StartAt": "CheckEncoding",
+          "States": {
+            "CheckEncoding": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::batch:submitJob.sync",
+              "Parameters": {
+                "JobName": "check-encoding",
+                "JobDefinition": "${EncodingCheckJobDefinition}",
+                "JobQueue": "${BatchJobQueue}",
+                "ContainerOverrides": {
+                  "Environment": [
+                    {"Name": "S3_BUCKET", "Value.$": "$.bucket"},
+                    {"Name": "S3_KEY", "Value.$": "$.key"}
+                  ]
+                }
+              },
+              "ResultPath": "$.encodingResult",
+              "Next": "RunGlueCrawler"
+            },
+            "RunGlueCrawler": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "${DataCrawler}"
+              },
+              "ResultPath": "$.crawlerResult",
+              "Next": "WaitForCrawler"
+            },
+            "WaitForCrawler": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "CheckCrawlerStatus"
+            },
+            "CheckCrawlerStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": {
+                "Name": "${DataCrawler}"
+              },
+              "ResultPath": "$.crawlerStatus",
+              "Next": "IsCrawlerDone"
+            },
+            "IsCrawlerDone": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.crawlerStatus.Crawler.State",
+                  "StringEquals": "READY",
+                  "Next": "RunGlueETL"
+                }
+              ],
+              "Default": "WaitForCrawler"
+            },
+            "RunGlueETL": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::glue:startJobRun.sync",
+              "Parameters": {
+                "JobName": "${GlueETLJob}",
+                "Arguments": {
+                  "--source_bucket.$": "$.bucket",
+                  "--source_key.$": "$.key",
+                  "--target_bucket": "${ProjectName}-processed-${AWS::AccountId}",
+                  "--database_name": "${ProjectName}_db",
+                  "--table_name": "processed_data"
+                }
+              },
+              "End": true
+            }
+          }
+        }
+
+  # ============================================================
+  # Glue
+  # ============================================================
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "${ProjectName}_db"
+        Description: Data processing pipeline database
+
+  DataCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: !Sub "${ProjectName}-crawler"
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        S3Targets:
+          - Path: !Sub "s3://${ProjectName}-landing-${AWS::AccountId}/"
+
+  GlueETLJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: !Sub "${ProjectName}-etl"
+      Role: !GetAtt GlueETLJobRole.Arn
+      GlueVersion: "4.0"
+      Command:
+        Name: glueetl
+        ScriptLocation: !Sub "s3://${DeploymentBucket}/${GlueScriptS3Key}"
+        PythonVersion: "3"
+      DefaultArguments:
+        "--job-language": python
+        "--TempDir": !Sub "s3://${DeploymentBucket}/glue-temp/"
+      MaxRetries: 0
+      NumberOfWorkers: 2
+      WorkerType: G.1X
+
+  # ============================================================
+  # Batch (Fargate)
+  # ============================================================
+
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      ComputeEnvironmentName: !Sub "${ProjectName}-compute-env"
+      Type: MANAGED
+      State: ENABLED
+      ComputeResources:
+        Type: FARGATE
+        MaxvCpus: 4
+        Subnets: !Ref SubnetIds
+        SecurityGroupIds: []
+
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Sub "${ProjectName}-job-queue"
+      State: ENABLED
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref BatchComputeEnvironment
+
+  EncodingCheckJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${ProjectName}-encoding-check"
+      Type: container
+      PlatformCapabilities:
+        - FARGATE
+      ContainerProperties:
+        Image: !Ref BatchJobImage
+        ResourceRequirements:
+          - Type: VCPU
+            Value: "0.25"
+          - Type: MEMORY
+            Value: "512"
+        ExecutionRoleArn: !GetAtt BatchJobRole.Arn
+        JobRoleArn: !GetAtt BatchJobRole.Arn
+
+  # ============================================================
+  # EMR Cluster
+  # ============================================================
+
+  EMRCluster:
+    Type: AWS::EMR::Cluster
+    Properties:
+      Name: !Sub "${ProjectName}-emr-cluster"
+      ReleaseLabel: emr-7.0.0
+      Applications:
+        - Name: Spark
+      ServiceRole: !Ref EMRServiceRole
+      JobFlowRole: !Ref EMRInstanceProfile
+      Instances:
+        MasterInstanceGroup:
+          InstanceCount: 1
+          InstanceType: m5.xlarge
+          Market: ON_DEMAND
+        CoreInstanceGroup:
+          InstanceCount: 2
+          InstanceType: m5.xlarge
+          Market: ON_DEMAND
+        Ec2SubnetId: !Select [0, !Ref SubnetIds]
+        Ec2KeyName: !Ref EmrKeyPair
+      Configurations:
+        - Classification: spark-defaults
+          ConfigurationProperties:
+            spark.sql.shuffle.partitions: "200"
+
+  # ============================================================
+  # DynamoDB
+  # ============================================================
+
+  StatusTrackingTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${ProjectName}-status"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+Outputs:
+  DataLandingBucketName:
+    Value: !Ref DataLandingBucket
+    Description: S3 bucket for incoming data files
+
+  ProcessedDataBucketName:
+    Value: !Ref ProcessedDataBucket
+    Description: S3 bucket for processed parquet data
+
+  StateMachineArn:
+    Value: !Ref DataProcessingStateMachine
+    Description: Step Function state machine ARN
+
+  GlueDatabaseName:
+    Value: !Ref GlueDatabase
+    Description: Glue catalog database name
+
+  EMRClusterId:
+    Value: !Ref EMRCluster
+    Description: EMR cluster ID
+
+  StatusTrackingTableName:
+    Value: !Ref StatusTrackingTable
+    Description: DynamoDB status tracking table name

@@ -1,0 +1,19 @@
+[project]
+name = "web-server-code"
+version = "0.1.0"
+description = "FastAPI web server that serves impression data as gzip CSV"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.28.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

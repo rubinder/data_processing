@@ -1,0 +1,9 @@
+[project]
+name = "aws-deployment"
+version = "0.1.0"
+description = "AWS deployment scripts for data processing pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "boto3>=1.35.0",
+    "python-dotenv>=1.0.0",
+]

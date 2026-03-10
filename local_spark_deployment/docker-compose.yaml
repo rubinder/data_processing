@@ -1,0 +1,40 @@
+services:
+  spark-master:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      SPARK_MODE: master
+      SPARK_MASTER_HOST: spark-master
+      SPARK_MASTER_PORT: "7077"
+      SPARK_MASTER_WEBUI_PORT: "8080"
+    ports:
+      - "7077:7077"
+      - "8081:8080"
+    volumes:
+      - ../airflow_deployment/dags/spark_scripts:/opt/spark-apps
+    networks:
+      - data-processing-network
+
+  spark-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPARK_MODE: worker
+      SPARK_MASTER_URL: spark://spark-master:7077
+      SPARK_WORKER_MEMORY: 2g
+      SPARK_WORKER_CORES: "2"
+    volumes:
+      - ../airflow_deployment/dags/spark_scripts:/opt/spark-apps
+    depends_on:
+      - spark-master
+    networks:
+      - data-processing-network
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network
