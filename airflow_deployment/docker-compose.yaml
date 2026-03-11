@@ -11,7 +11,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
-    AIRFLOW_CONN_SPARK_LOCAL: spark://spark-master:7077
+    AIRFLOW_CONN_SPARK_LOCAL: spark://spark%3A%2F%2Fspark-master%3A7077
     AIRFLOW_CONN_AWS_DEFAULT: aws://
   volumes:
     - ./dags:/opt/airflow/dags
