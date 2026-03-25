@@ -1,0 +1,28 @@
+name: 'data_processing_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'data_processing'
+
+model-paths: ["models"]
+analysis-paths: ["analyses"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+snapshot-paths: ["snapshots"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  data_processing_analytics:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: analytics
+      +materialized: table
+    analysis:
+      +schema: analytics
+      +materialized: table

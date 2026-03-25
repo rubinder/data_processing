@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  dbt-postgres:
+    image: postgres:15
+    container_name: dbt-postgres
+    environment:
+      POSTGRES_USER: dbt
+      POSTGRES_PASSWORD: dbt
+      POSTGRES_DB: data_processing
+    ports:
+      - "5433:5432"
+    volumes:
+      - dbt-postgres-data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./load_data.py:/scripts/load_data.py
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "dbt"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-processing-network
+
+  dbt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dbt-runner
+    depends_on:
+      dbt-postgres:
+        condition: service_healthy
+    environment:
+      DBT_PROFILES_DIR: /dbt
+    volumes:
+      - ./dbt_project:/dbt
+    networks:
+      - data-processing-network
+    entrypoint: ["sh", "-c", "dbt deps && dbt seed && dbt run && dbt test"]
+
+volumes:
+  dbt-postgres-data:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

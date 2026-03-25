@@ -1,0 +1,12 @@
+data_processing:
+  target: local
+  outputs:
+    local:
+      type: postgres
+      host: dbt-postgres
+      port: 5432
+      user: dbt
+      password: dbt
+      dbname: data_processing
+      schema: public
+      threads: 4

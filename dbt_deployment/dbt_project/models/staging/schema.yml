@@ -1,0 +1,52 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: impressions
+        description: "Raw impression events from web server API"
+        columns:
+          - name: user_id
+            description: "UUID representing a unique user"
+            tests:
+              - not_null
+          - name: impression_id
+            description: "UUID for a unique impression (deterministic from user_id, page_type, date, hour, minute)"
+            tests:
+              - not_null
+          - name: page_type
+            description: "Page type enumeration: 1, 2, or 3"
+            tests:
+              - not_null
+              - accepted_values:
+                  values: [1, 2, 3]
+          - name: date
+            description: "Date in YYYY-MM-DD format"
+            tests:
+              - not_null
+          - name: hour
+            description: "Hour of the day (0-23)"
+            tests:
+              - not_null
+          - name: min
+            description: "Minute (0-59)"
+          - name: second
+            description: "Second (0-59)"
+          - name: event_type
+            description: "Funnel event type: a through f (sequential)"
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['a', 'b', 'c', 'd', 'e', 'f']
+
+models:
+  - name: stg_impressions
+    description: "Staged impressions with cleaned types and derived timestamp"
+    columns:
+      - name: impression_id
+        tests:
+          - not_null
+      - name: user_id
+        tests:
+          - not_null
