@@ -42,3 +42,13 @@ Complete the following under different folders
         - [x] Schema tests validating not_null, accepted_values, and uniqueness constraints
         - [x] Connects to shared data-processing-network
         - [x] README.md describing how to deploy and run
+    - [x] Flink Applications under flink_applications
+        - [x] PyFlink hello world batch job using Table API
+        - [x] pyproject.toml with apache-flink 1.18.1 dependency
+        - [x] unit tests under /tests folder
+    - [x] Flink Deployment under flink_deployment
+        - [x] Dockerfile with Flink 1.18.1 and PyFlink installed
+        - [x] docker-compose.yaml with JobManager and TaskManager, connects to data-processing-network
+        - [x] docker-compose.local.yaml for standalone mode
+        - [x] deploy.sh script (up, down, restart, status, logs, submit)
+        - [x] README.md describing how to deploy and run
