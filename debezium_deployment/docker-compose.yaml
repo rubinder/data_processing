@@ -1,0 +1,106 @@
+services:
+  debezium-zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: debezium-zookeeper
+    hostname: debezium-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - data-processing-network
+
+  debezium-kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: debezium-kafka
+    hostname: debezium-kafka
+    depends_on:
+      - debezium-zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: debezium-zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://debezium-kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+    networks:
+      - data-processing-network
+
+  debezium-postgres:
+    image: postgres:15
+    container_name: debezium-postgres
+    hostname: debezium-postgres
+    environment:
+      POSTGRES_USER: cdc_user
+      POSTGRES_PASSWORD: cdc_pass
+      POSTGRES_DB: cdc_source
+    ports:
+      - "5434:5432"
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=logical"
+      - "-c"
+      - "max_wal_senders=4"
+      - "-c"
+      - "max_replication_slots=4"
+    volumes:
+      - debezium-postgres-data:/var/lib/postgresql/data
+      - ./init_db.sql:/docker-entrypoint-initdb.d/01_init.sql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cdc_user", "-d", "cdc_source"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-processing-network
+
+  debezium-connect:
+    image: debezium/connect:2.5
+    container_name: debezium-connect
+    hostname: debezium-connect
+    depends_on:
+      debezium-kafka:
+        condition: service_started
+      debezium-postgres:
+        condition: service_healthy
+    environment:
+      BOOTSTRAP_SERVERS: debezium-kafka:9092
+      GROUP_ID: 1
+      CONFIG_STORAGE_TOPIC: debezium_connect_configs
+      OFFSET_STORAGE_TOPIC: debezium_connect_offsets
+      STATUS_STORAGE_TOPIC: debezium_connect_statuses
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+    ports:
+      - "8083:8083"
+    networks:
+      - data-processing-network
+
+  debezium-kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.1
+    container_name: debezium-kafka-ui
+    depends_on:
+      - debezium-kafka
+      - debezium-connect
+    environment:
+      KAFKA_CLUSTERS_0_NAME: debezium-local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: debezium-kafka:9092
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: debezium
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://debezium-connect:8083
+    ports:
+      - "8084:8080"
+    networks:
+      - data-processing-network
+
+volumes:
+  debezium-postgres-data:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network
