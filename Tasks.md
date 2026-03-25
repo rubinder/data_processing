@@ -52,3 +52,12 @@ Complete the following under different folders
         - [x] docker-compose.local.yaml for standalone mode
         - [x] deploy.sh script (up, down, restart, status, logs, submit)
         - [x] README.md describing how to deploy and run
+    - [x] Debezium CDC Deployment under debezium_deployment
+        - [x] docker-compose.yaml with Zookeeper, Kafka, PostgreSQL (wal_level=logical), Debezium Connect 2.5, Kafka UI
+        - [x] docker-compose.local.yaml for standalone mode
+        - [x] init_db.sql with impressions schema (events, users, pull_status tables) with seed data
+        - [x] connectors/postgres-source.json Debezium connector config capturing impressions schema
+        - [x] sample_changes.sql with sample inserts, updates, deletes for generating CDC events
+        - [x] deploy.sh script (up, down, restart, status, logs, register, connectors, topics, consume, exec-sql)
+        - [x] Connects to shared data-processing-network
+        - [x] README.md describing how to deploy and run

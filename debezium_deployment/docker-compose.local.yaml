@@ -1,0 +1,4 @@
+networks:
+  data-processing-network:
+    external: false
+    name: debezium-local-network

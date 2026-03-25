@@ -1,0 +1,28 @@
+{
+    "name": "impressions-postgres-connector",
+    "config": {
+        "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+        "database.hostname": "debezium-postgres",
+        "database.port": "5432",
+        "database.user": "cdc_user",
+        "database.password": "cdc_pass",
+        "database.dbname": "cdc_source",
+        "topic.prefix": "cdc",
+        "schema.include.list": "impressions",
+        "table.include.list": "impressions.events,impressions.users,impressions.pull_status",
+        "plugin.name": "pgoutput",
+        "publication.autocreate.mode": "filtered",
+        "slot.name": "debezium_impressions",
+        "heartbeat.interval.ms": "10000",
+        "tombstones.on.delete": "true",
+        "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "key.converter.schemas.enable": "false",
+        "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+        "value.converter.schemas.enable": "false",
+        "transforms": "unwrap",
+        "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+        "transforms.unwrap.drop.tombstones": "false",
+        "transforms.unwrap.delete.handling.mode": "rewrite",
+        "transforms.unwrap.add.fields": "op,table,source.ts_ms"
+    }
+}
