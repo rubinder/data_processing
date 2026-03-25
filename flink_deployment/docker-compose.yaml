@@ -1,0 +1,40 @@
+services:
+  flink-jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    command: jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        jobmanager.memory.process.size: 1600m
+    ports:
+      - "8082:8081"
+    volumes:
+      - ../flink_applications/flink_applications:/opt/flink-apps
+    networks:
+      - data-processing-network
+
+  flink-taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: taskmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+        taskmanager.memory.process.size: 1728m
+    volumes:
+      - ../flink_applications/flink_applications:/opt/flink-apps
+    depends_on:
+      - flink-jobmanager
+    networks:
+      - data-processing-network
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

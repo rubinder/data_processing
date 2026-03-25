@@ -8,3 +8,5 @@ Under web_server_code should contain web server code using FastAPI that serves f
 Under web_server_local should contain code to deploy web server locally
 Under web_server_aws should contain code to deploy web server to AWS mentioned in the beginning
 dbt Deployment is under dbt_deployment, it contains a Dockerfile and docker-compose to deploy PostgreSQL and dbt locally using Docker, a shell script to manage deployment, a data loader script that pulls impression data from the web server API into PostgreSQL, and a dbt project that runs analysis models on the impression data including funnel analysis, page type summary, user engagement, and hourly traffic patterns
+Flink Applications are under flink_applications and are in PyFlink (Apache Flink 1.18). Contains a hello world batch job using the Table API.
+Flink Deployment is under flink_deployment, it contains a Dockerfile, docker-compose to deploy a Flink JobManager and TaskManager locally using Docker, and a deploy.sh script to manage the cluster lifecycle and submit PyFlink jobs

@@ -1,0 +1,13 @@
+services:
+  flink-jobmanager:
+    networks:
+      - default
+
+  flink-taskmanager:
+    networks:
+      - default
+
+networks:
+  data-processing-network: !reset null
+  default:
+    driver: bridge
