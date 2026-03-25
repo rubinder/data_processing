@@ -28,3 +28,17 @@ Complete the following under different folders
     - [x] Under web_server_aws
         - [x] Should deploy the code under web_server_code to AWS using a shell script
     - [x] Add a README.md to each directory describing how to run scripts, launch Dockerfiles, and what each directory does
+    - [x] dbt Deployment under dbt_deployment
+        - [x] Dockerfile and docker-compose.yaml deploying PostgreSQL 15 and dbt-postgres locally with Docker
+        - [x] Shell script (deploy.sh) to manage lifecycle (up, down, restart, status, logs, run, seed, test, load-data)
+        - [x] init_db.sql to create raw schema and impressions table
+        - [x] load_data.py script to pull impression data from web server API into PostgreSQL
+        - [x] dbt project with staging model (stg_impressions) that cleans raw data
+        - [x] Intermediate model (int_impressions_aggregated) mirroring the Spark aggregation job
+        - [x] Analysis model: funnel_analysis - conversion rates by page type through event stages a-f
+        - [x] Analysis model: page_type_summary - high-level stats per page type (volume, users, funnel depth, conversion rates)
+        - [x] Analysis model: user_engagement - user-level metrics (impressions, funnel depth, most engaged page type)
+        - [x] Analysis model: hourly_traffic - hourly traffic patterns by page type
+        - [x] Schema tests validating not_null, accepted_values, and uniqueness constraints
+        - [x] Connects to shared data-processing-network
+        - [x] README.md describing how to deploy and run

@@ -1,0 +1,43 @@
+version: 2
+
+models:
+  - name: funnel_analysis
+    description: >
+      Funnel conversion analysis by page type showing how many impressions
+      reach each event stage (a through f) and the conversion rates between stages.
+    columns:
+      - name: page_type
+        tests:
+          - not_null
+      - name: event_type
+        tests:
+          - not_null
+
+  - name: page_type_summary
+    description: >
+      High-level summary statistics per page type including total impressions,
+      unique users, average funnel depth, and engagement metrics.
+    columns:
+      - name: page_type
+        tests:
+          - not_null
+          - unique
+
+  - name: user_engagement
+    description: >
+      User-level engagement metrics showing activity across page types,
+      total impressions, average funnel depth, and most engaged page type.
+    columns:
+      - name: user_id
+        tests:
+          - not_null
+          - unique
+
+  - name: hourly_traffic
+    description: >
+      Hourly traffic patterns by page type showing impression volume
+      and engagement metrics over time.
+    columns:
+      - name: event_date
+        tests:
+          - not_null
