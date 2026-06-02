@@ -36,6 +36,8 @@ services:
       - ./dbt_project:/dbt
     networks:
       - data-processing-network
+    ports:
+      - "8580:8580"
     entrypoint: ["sh", "-c", "dbt deps && dbt seed && dbt run && dbt test"]
 
 volumes:
