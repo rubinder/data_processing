@@ -9,7 +9,7 @@ docker network inspect data-processing-network >/dev/null 2>&1 || \
     docker network create data-processing-network
 
 usage() {
-    echo "Usage: $0 {up|down|restart|status|logs|run|seed|test|load-data}"
+    echo "Usage: $0 {up|down|restart|status|logs|run|seed|test|docs|load-data}"
     echo ""
     echo "Commands:"
     echo "  up          Build and start PostgreSQL and dbt containers"
@@ -20,6 +20,7 @@ usage() {
     echo "  run         Execute dbt run (build models)"
     echo "  seed        Execute dbt seed (load seed data)"
     echo "  test        Execute dbt test (run tests)"
+    echo "  docs        Generate and serve dbt docs at http://localhost:8580"
     echo "  load-data   Load data from web server API into PostgreSQL"
     echo "              Options: --all or --page_type N --date YYYY-MM-DD --hour H"
     exit 1
@@ -68,6 +69,11 @@ case "${1:-}" in
     test)
         echo "Running dbt tests..."
         docker compose run --rm dbt dbt test
+        ;;
+    docs)
+        echo "Generating and serving dbt docs at http://localhost:8580 ..."
+        echo "Press Ctrl+C to stop the docs server."
+        docker compose run --rm --entrypoint "" -p 8580:8580 dbt sh -c "dbt deps && dbt docs generate && dbt docs serve --port 8580 --host 0.0.0.0 --no-browser"
         ;;
     load-data)
         shift
