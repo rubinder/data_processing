@@ -1,0 +1,20 @@
+[project]
+name = "clickhouse-deployment"
+version = "0.1.0"
+description = "ClickHouse distributed OLAP deployment for impression analytics"
+requires-python = ">=3.10"
+dependencies = [
+    "clickhouse-connect",
+    "requests",
+    "pytest",
+]
+
+[project.optional-dependencies]
+test = ["chdb"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+only-include = ["load_data.py"]

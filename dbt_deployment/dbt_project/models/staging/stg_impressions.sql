@@ -7,19 +7,16 @@ cleaned as (
         user_id,
         impression_id,
         page_type,
-        date::date as event_date,
+        -- Safe casts: a malformed date/time yields NULL instead of aborting
+        -- the whole model. NULLs are then caught by the not_null tests
+        -- rather than crashing the run on a single bad row.
+        {{ safe_to_date('date') }} as event_date,
         hour,
         min as minute,
         second,
         event_type,
-        make_timestamp(
-            extract(year from date::date)::int,
-            extract(month from date::date)::int,
-            extract(day from date::date)::int,
-            hour,
-            min,
-            second
-        ) as event_timestamp
+        {{ safe_event_timestamp('date', 'hour', 'min', 'second') }}
+            as event_timestamp
     from source
 )
 

@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  duckdb-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: duckdb-app
+    ports:
+      - "8100:8100"
+    environment:
+      DUCKDB_PATH: /data/impressions.duckdb
+      API_BASE_URL: ${API_BASE_URL:-http://web-server:8000}
+    volumes:
+      - duckdb-data:/data
+    networks:
+      - data-processing-network
+
+volumes:
+  duckdb-data:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

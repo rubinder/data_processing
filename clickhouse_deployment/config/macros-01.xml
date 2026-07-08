@@ -1,0 +1,7 @@
+<clickhouse>
+    <!-- Per-node macros: substituted into ReplicatedMergeTree zk paths. -->
+    <macros>
+        <shard>01</shard>
+        <replica>clickhouse-01</replica>
+    </macros>
+</clickhouse>

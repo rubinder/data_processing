@@ -50,3 +50,14 @@ models:
       - name: user_id
         tests:
           - not_null
+      - name: event_date
+        description: "Parsed event date; NULL means the source date was malformed"
+        tests:
+          - not_null:
+              config:
+                # Surface rows whose source date failed to parse. Warn (not
+                # error) so a few bad rows flag the issue without blocking the
+                # whole pipeline.
+                severity: warn
+      - name: event_timestamp
+        description: "Derived event timestamp; NULL if any time part is invalid"

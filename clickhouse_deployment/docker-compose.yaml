@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  clickhouse-keeper:
+    image: clickhouse/clickhouse-keeper:24.8
+    container_name: clickhouse-keeper
+    volumes:
+      - ./config/keeper.xml:/etc/clickhouse-keeper/keeper_config.xml
+      - clickhouse-keeper-data:/var/lib/clickhouse-keeper
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    networks:
+      - data-processing-network
+
+  clickhouse-01:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse-01
+    hostname: clickhouse-01
+    depends_on:
+      - clickhouse-keeper
+    volumes:
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./config/macros-01.xml:/etc/clickhouse-server/config.d/macros.xml
+      - clickhouse-01-data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data-processing-network
+
+  clickhouse-02:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: clickhouse-02
+    hostname: clickhouse-02
+    depends_on:
+      - clickhouse-keeper
+    volumes:
+      - ./config/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
+      - ./config/macros-02.xml:/etc/clickhouse-server/config.d/macros.xml
+      - clickhouse-02-data:/var/lib/clickhouse
+    ports:
+      - "8124:8123"
+      - "9001:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - data-processing-network
+
+volumes:
+  clickhouse-keeper-data:
+  clickhouse-01-data:
+  clickhouse-02-data:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

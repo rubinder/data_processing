@@ -61,3 +61,69 @@ Complete the following under different folders
         - [x] deploy.sh script (up, down, restart, status, logs, register, connectors, topics, consume, exec-sql)
         - [x] Connects to shared data-processing-network
         - [x] README.md describing how to deploy and run
+    - [x] DuckDB Deployment under duckdb_deployment (embedded, application-level OLAP)
+        - [x] FastAPI service embedding in-process DuckDB
+        - [x] Loader pulls impression csv.gz from the web server API into a DuckDB table
+        - [x] Analytical endpoints mirroring the dbt analyses: funnel_analysis, page_type_summary, user_engagement, hourly_traffic
+        - [x] Dockerfile, docker-compose.yaml (external data-processing-network), deploy.sh (up|down|restart|status|logs|load-data|query)
+        - [x] uv pyproject.toml, README.md
+        - [x] pytest tests: real in-process DuckDB queries + FastAPI TestClient (11 passing)
+    - [x] ClickHouse Deployment under clickhouse_deployment (distributed OLAP, concurrent queries across nodes)
+        - [x] Multi-node cluster: 2 shards + clickhouse-keeper, Distributed table over ReplicatedMergeTree
+        - [x] cluster.xml / keeper.xml / macros config, init/schema.sql (ON CLUSTER)
+        - [x] clickhouse-connect loader pulls impression csv.gz from the web server API
+        - [x] Four analytical SQL queries mirroring the dbt analyses (templated table name)
+        - [x] docker-compose.yaml (external data-processing-network), deploy.sh (up|down|restart|status|logs|schema|load-data|query), uv pyproject.toml, README.md
+        - [x] pytest tests: analytical SQL executed against embedded ClickHouse (chdb) + mocked-request loader tests (6 passing)
+
+---
+
+## Staff-Level Hardening Backlog
+
+The work above demonstrates *breadth* (11 deployment targets). The items below
+exist to demonstrate *depth of judgment under change, scale, and failure* —
+schema evolution, ETL performance, idempotency, and reliability. Each item
+should ship with a short written narrative of the issue and its resolution
+(a `DECISIONS.md` / incident-style writeup) rather than just code.
+
+### #1 — Schema evolution (partially done, see spark_applications/DECISIONS.md)
+- [x] Replace `inferSchema=True` with explicit `StructType` schemas for all CSV reads (`utils/schema.py`, done under #2)
+- [x] Add a quarantine / dead-letter path for records that do not conform to the contract (`utils/quality.py`, `write_quarantine`)
+- [x] dbt: use safe casts (`macros/safe_casts.sql`) so one malformed row doesn't fail the model; warn-level not_null on `event_date`
+- [ ] Introduce a Schema Registry (Avro/Protobuf) for the Debezium → Kafka path with an explicit compatibility mode (needs infra)
+- [ ] Wire Debezium → Schema Registry → Flink and demonstrate surviving a source `ALTER TABLE` (add/rename/drop column) gracefully (needs infra)
+- [ ] Adopt Delta/Iceberg with column mapping + a deliberate `mergeSchema`/`overwriteSchema` policy for evolving tables (quarantine Delta write already uses `mergeSchema`)
+- [ ] dbt: add model contracts + `dbt source freshness` (needs a `loaded_at` column added to `raw.impressions`)
+
+### #2 — ETL performance & correctness (HIGHEST PRIORITY — mostly done, see spark_applications/DECISIONS.md)
+- [x] `api_pull.py`: stop decompressing in the driver; let Spark read gzip CSV directly (distributed)
+- [x] Use explicit schema instead of `inferSchema` (double scan + non-deterministic types) — `utils/schema.py`
+- [x] Replace full-table `mode("overwrite")` with idempotent partition replacement (`partitionOverwriteMode=dynamic`) so reprocessing one hour does not nuke history
+- [x] Remove `df.count()` progress-logging actions that force recomputation
+- [x] Add `repartition` before partitioned writes to avoid the small-files explosion at hour grain (`_compact`)
+- [x] `aggregation.py`: filter on partition columns for pruning + fix `hour` string/int typing
+- [x] Enable AQE / adaptive skew-join at the session level (`utils/session.py`)
+- [ ] Wire salting (`salted_join.py`) into the real hot-key path in `aggregation.py`; tune broadcast thresholds
+- [ ] Write up before/after shuffle + runtime metrics (needs a real cluster run)
+
+### #3 — Idempotency, reliability, data quality (partially done, see spark_applications/DECISIONS.md)
+- [x] Retry + backoff on the API pull (`fetch_impression_data`)
+- [x] Deduplication for at-least-once CDC delivery (`quality.deduplicate`)
+- [x] Row-count reconciliation read → written + quarantined (`quality.reconcile_counts`, wired into `api_pull`)
+- [ ] Transactionally couple raw-file write and table write so partial failure cannot orphan data
+- [ ] Volume/anomaly checks; freshness SLAs
+
+### #4 — Orchestration maturity (Airflow) (mostly done, see spark_applications/DECISIONS.md)
+- [x] Real backfillable DAG (`dags/impression_pipeline.py`): hourly schedule, catchup, idempotent date/hour params, retries+backoff, SLA, failure callback
+- [x] Dynamic task mapping over page_types
+- [ ] Datasets / data-aware scheduling; document a reprocessing runbook
+
+### #5 — Streaming / CDC (connect the deployed pieces) (done, see spark_applications/DECISIONS.md)
+- [x] Flink job that consumes the Debezium topics (`flink_applications/cdc_impressions.py`)
+- [x] Checkpointing (exactly-once), event-time watermarks, CDC delete handling, windowed aggregation
+- [ ] Schema registry on the Debezium → Flink path; upsert-kafka / Delta sink instead of print sink
+
+### #6 — Observability, lineage, FinOps (partially done, see spark_applications/DECISIONS.md)
+- [x] Replace `print()` with structured logging; emit metrics (rows in/out, bytes) — `utils/observability.py`
+- [ ] OpenLineage across Spark → S3 → Glue → Athena → dbt
+- [ ] Cost story: parquet compression, S3 lifecycle, EMR right-sizing, Athena scanned-bytes, Glue DPU-hours

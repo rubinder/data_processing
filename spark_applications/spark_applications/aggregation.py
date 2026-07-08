@@ -6,6 +6,7 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 
 from spark_applications.utils.mode import Mode, add_mode_argument, parse_mode
+from spark_applications.utils.observability import get_logger, log_event
 from spark_applications.utils.session import get_spark_session
 from spark_applications.utils.storage import get_storage_adapter
 
@@ -53,25 +54,30 @@ def main(argv: list[str] | None = None):
 
     spark = get_spark_session("Aggregation", mode)
     storage = get_storage_adapter(mode)
+    log = get_logger("aggregation")
 
     try:
         # Read processed impressions data
         source_path = "impressions"
-        print(f"Reading data for date={args.date}, hour={args.hour}")
+        log_event(
+            log, "aggregation_start", date=args.date, hour=args.hour,
+        )
         df = storage.read_partitioned(spark, source_path)
 
-        # Filter to requested date and hour
+        # Filter on the partition columns so Spark prunes to just the relevant
+        # date/hour directories instead of scanning the whole table. hour is
+        # cast to int so the comparison is correct whether the partition value
+        # is read back as a string or an int.
         df_filtered = df.filter(
-            (F.col("date") == args.date) & (F.col("hour") == int(args.hour))
+            (F.col("date") == args.date)
+            & (F.col("hour").cast("int") == int(args.hour))
         )
 
-        row_count = df_filtered.count()
-        print(f"Found {row_count} rows to aggregate")
-
-        # Aggregate
+        # Aggregate. We avoid count() actions for progress logging: each one is
+        # a full job that forces the lineage to recompute before the write.
         agg_df = aggregate_impressions(df_filtered)
 
-        # Write output
+        # Write output (dynamic partition overwrite -> idempotent re-runs)
         output_path = "impressions_aggregated"
         storage.write_output(
             agg_df,
@@ -79,7 +85,9 @@ def main(argv: list[str] | None = None):
             partition_cols=["page_type"],
         )
 
-        print(f"Wrote {agg_df.count()} aggregated rows")
+        log_event(
+            log, "aggregation_complete", date=args.date, hour=args.hour,
+        )
     finally:
         spark.stop()
 

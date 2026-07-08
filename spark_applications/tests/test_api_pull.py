@@ -5,7 +5,10 @@ import gzip
 import io
 import os
 
+import pytest
+
 from spark_applications.api_pull import fetch_impression_data, parse_args
+from spark_applications.utils.schema import IMPRESSION_SCHEMA
 from spark_applications.utils.storage import LocalStorageAdapter
 
 
@@ -39,11 +42,50 @@ def test_fetch_impression_data(mocker):
     assert result == b"fake_gzip_content"
 
 
-def test_local_storage_round_trip(spark, tmp_path):
-    """Test saving a gzip CSV and reading it back via LocalStorageAdapter."""
-    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+def test_fetch_retries_then_succeeds(mocker):
+    """Transient failures are retried; a later success returns normally."""
+    import requests
 
-    # Create a sample CSV and gzip it
+    good = mocker.MagicMock()
+    good.content = b"ok"
+    good.raise_for_status = mocker.MagicMock()
+
+    get = mocker.patch(
+        "spark_applications.api_pull.requests.get",
+        side_effect=[
+            requests.exceptions.ConnectionError("boom"),
+            requests.exceptions.ConnectionError("boom"),
+            good,
+        ],
+    )
+
+    result = fetch_impression_data(
+        "http://localhost:8000", "1", "2026-01-01", "10",
+        backoff_base=0.0, sleep=lambda _: None,
+    )
+
+    assert result == b"ok"
+    assert get.call_count == 3
+
+
+def test_fetch_raises_after_max_attempts(mocker):
+    """Exhausting retries raises rather than failing silently."""
+    import requests
+
+    mocker.patch(
+        "spark_applications.api_pull.requests.get",
+        side_effect=requests.exceptions.ConnectionError("down"),
+    )
+
+    with pytest.raises(RuntimeError, match="failed after"):
+        fetch_impression_data(
+            "http://localhost:8000", "1", "2026-01-01", "10",
+            max_attempts=3, backoff_base=0.0, sleep=lambda _: None,
+        )
+
+
+def _make_gzip_csv() -> bytes:
+    """Build a gzip-compressed impression CSV with 10 rows."""
     csv_buffer = io.StringIO()
     writer = csv.writer(csv_buffer)
     writer.writerow([
@@ -55,24 +97,30 @@ def test_local_storage_round_trip(spark, tmp_path):
             f"user_{i}", f"imp_{i}", "1",
             "2026-01-01", "10", "30", str(i), "a",
         ])
+    return gzip.compress(csv_buffer.getvalue().encode("utf-8"))
 
-    csv_bytes = csv_buffer.getvalue().encode("utf-8")
-    gz_content = gzip.compress(csv_bytes)
 
-    # Save raw gzip file
+def test_read_gzip_csv_directly_with_schema(spark, tmp_path):
+    """Spark reads the .gz directly (no driver decompress) and the explicit
+    schema is enforced rather than inferred."""
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+
     raw_gz_path = "test/data.csv.gz"
-    adapter.save_raw_file(gz_content, raw_gz_path)
+    adapter.save_raw_file(_make_gzip_csv(), raw_gz_path)
 
-    # Decompress and save CSV
-    raw_csv_path = "test/data.csv"
-    adapter.save_raw_file(csv_bytes, raw_csv_path)
-
-    # Read the CSV back
-    df = adapter.read_csv(spark, raw_csv_path)
+    # Read the gzip file directly with the explicit schema.
+    df = adapter.read_csv(spark, raw_gz_path, schema=IMPRESSION_SCHEMA)
 
     assert df.count() == 10
-    assert "user_id" in df.columns
-    assert "event_type" in df.columns
+    # Names and types match the contract we supplied, not an inferred guess.
+    # (The CSV reader always relaxes nullability to True, so compare on
+    # name/type rather than the full struct.)
+    expected = [(f.name, f.dataType) for f in IMPRESSION_SCHEMA.fields]
+    actual = [(f.name, f.dataType) for f in df.schema.fields]
+    assert actual == expected
+    # Numeric columns are typed, not strings.
+    assert dict(df.dtypes)["hour"] == "int"
+    assert dict(df.dtypes)["second"] == "int"
 
 
 def test_local_storage_status(tmp_path):

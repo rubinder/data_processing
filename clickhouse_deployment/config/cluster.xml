@@ -1,0 +1,41 @@
+<clickhouse>
+    <!--
+        Cluster topology: two shards, one replica each.
+        Rows are sharded across clickhouse-01 and clickhouse-02 so that
+        analytical queries fan out and execute concurrently on both nodes,
+        with the initiator merging the partial aggregation states.
+    -->
+    <remote_servers>
+        <impressions_cluster>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>clickhouse-01</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>clickhouse-02</host>
+                    <port>9000</port>
+                </replica>
+            </shard>
+        </impressions_cluster>
+    </remote_servers>
+
+    <!-- Coordination for ReplicatedMergeTree metadata (DDL, replicas). -->
+    <zookeeper>
+        <node>
+            <host>clickhouse-keeper</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+
+    <!-- Allow distributed DDL (ON CLUSTER) statements. -->
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
+
+    <listen_host>0.0.0.0</listen_host>
+</clickhouse>
