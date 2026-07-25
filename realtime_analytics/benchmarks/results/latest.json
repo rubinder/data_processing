@@ -1,0 +1,719 @@
+{
+  "generated_at": "2026-07-25T15:24:38",
+  "backend": "chdb",
+  "rows": 12000000,
+  "repeat": 15,
+  "warmup": 4,
+  "account_id": "acct_0000",
+  "conversation_id": "52b520c1-333b-ca58-391b-93254c7ec105",
+  "query_condition_cache": "disabled",
+  "window": {
+    "start": "2026-06-01 00:00:00",
+    "end": "2026-06-08 00:00:00"
+  },
+  "stages": {
+    "v0_naive": {
+      "label": "Naive: all String, JSON blob, ORDER BY tuple()",
+      "table": "events_v0_naive",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 156.09,
+          "p95_ms": 181.09,
+          "min_ms": 147.43,
+          "max_ms": 192.11,
+          "stdev_ms": 13.41,
+          "engine_ms": 155.04,
+          "rows_read": 12000000,
+          "bytes_read": 2012497557,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q2_conversation_lookup": {
+          "p50_ms": 20.68,
+          "p95_ms": 26.04,
+          "min_ms": 17.75,
+          "max_ms": 26.54,
+          "stdev_ms": 2.89,
+          "engine_ms": 20.54,
+          "rows_read": 12000000,
+          "bytes_read": 468131100,
+          "result_rows": 8,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q3_platform_wide": {
+          "p50_ms": 260.76,
+          "p95_ms": 285.65,
+          "min_ms": 223.6,
+          "max_ms": 324.71,
+          "stdev_ms": 24.24,
+          "engine_ms": 260.57,
+          "rows_read": 12000000,
+          "bytes_read": 1906103048,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q4_slow_responses": {
+          "p50_ms": 190.0,
+          "p95_ms": 204.31,
+          "min_ms": 166.76,
+          "max_ms": 208.87,
+          "stdev_ms": 13.61,
+          "engine_ms": 189.77,
+          "rows_read": 12000000,
+          "bytes_read": 2052928155,
+          "result_rows": 13,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        }
+      }
+    },
+    "v1_typed": {
+      "label": "+ Physical types, LowCardinality, codecs",
+      "table": "events_v1_typed",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 41.59,
+          "p95_ms": 49.47,
+          "min_ms": 35.52,
+          "max_ms": 51.45,
+          "stdev_ms": 4.58,
+          "engine_ms": 41.19,
+          "rows_read": 12000000,
+          "bytes_read": 167910576,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0093
+        },
+        "q2_conversation_lookup": {
+          "p50_ms": 9.24,
+          "p95_ms": 10.21,
+          "min_ms": 8.36,
+          "max_ms": 10.61,
+          "stdev_ms": 0.7,
+          "engine_ms": 8.94,
+          "rows_read": 12000000,
+          "bytes_read": 192010880,
+          "result_rows": 8,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q3_platform_wide": {
+          "p50_ms": 38.22,
+          "p95_ms": 42.87,
+          "min_ms": 34.29,
+          "max_ms": 44.29,
+          "stdev_ms": 3.09,
+          "engine_ms": 38.05,
+          "rows_read": 12000000,
+          "bytes_read": 155985945,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0044
+        },
+        "q4_slow_responses": {
+          "p50_ms": 48.45,
+          "p95_ms": 55.07,
+          "min_ms": 42.99,
+          "max_ms": 59.28,
+          "stdev_ms": 4.32,
+          "engine_ms": 48.25,
+          "rows_read": 12000000,
+          "bytes_read": 169882191,
+          "result_rows": 13,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        }
+      }
+    },
+    "v2_sorted": {
+      "label": "+ Sorting key (account_id, event_ts)",
+      "table": "events_v2_sorted",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 4.75,
+          "p95_ms": 7.09,
+          "min_ms": 4.5,
+          "max_ms": 8.28,
+          "stdev_ms": 1.19,
+          "engine_ms": 4.54,
+          "rows_read": 90112,
+          "bytes_read": 1261568,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0118
+        },
+        "q2_conversation_lookup": {
+          "p50_ms": 9.88,
+          "p95_ms": 10.47,
+          "min_ms": 8.88,
+          "max_ms": 11.3,
+          "stdev_ms": 0.64,
+          "engine_ms": 9.5,
+          "rows_read": 12000000,
+          "bytes_read": 192123776,
+          "result_rows": 8,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q3_platform_wide": {
+          "p50_ms": 19.73,
+          "p95_ms": 21.31,
+          "min_ms": 17.73,
+          "max_ms": 23.36,
+          "stdev_ms": 1.34,
+          "engine_ms": 19.46,
+          "rows_read": 4135376,
+          "bytes_read": 43309566,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0051
+        },
+        "q4_slow_responses": {
+          "p50_ms": 4.02,
+          "p95_ms": 5.75,
+          "min_ms": 3.73,
+          "max_ms": 6.12,
+          "stdev_ms": 0.8,
+          "engine_ms": 3.86,
+          "rows_read": 90112,
+          "bytes_read": 1441792,
+          "result_rows": 13,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        }
+      }
+    },
+    "v3_partitioned": {
+      "label": "+ PARTITION BY toYYYYMM(event_ts)",
+      "table": "events_v3_partitioned",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 4.81,
+          "p95_ms": 7.1,
+          "min_ms": 4.4,
+          "max_ms": 7.35,
+          "stdev_ms": 1.07,
+          "engine_ms": 4.59,
+          "rows_read": 90112,
+          "bytes_read": 1261568,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0118
+        },
+        "q2_conversation_lookup": {
+          "p50_ms": 9.96,
+          "p95_ms": 10.83,
+          "min_ms": 9.09,
+          "max_ms": 11.65,
+          "stdev_ms": 0.71,
+          "engine_ms": 9.6,
+          "rows_read": 12000000,
+          "bytes_read": 192106112,
+          "result_rows": 8,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q3_platform_wide": {
+          "p50_ms": 14.11,
+          "p95_ms": 15.56,
+          "min_ms": 12.99,
+          "max_ms": 15.76,
+          "stdev_ms": 0.92,
+          "engine_ms": 13.72,
+          "rows_read": 2469328,
+          "bytes_read": 32016030,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.002
+        },
+        "q4_slow_responses": {
+          "p50_ms": 4.11,
+          "p95_ms": 4.83,
+          "min_ms": 3.67,
+          "max_ms": 4.84,
+          "stdev_ms": 0.37,
+          "engine_ms": 3.75,
+          "rows_read": 90112,
+          "bytes_read": 1441792,
+          "result_rows": 13,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        }
+      }
+    },
+    "v4_indexed": {
+      "label": "+ Skipping indexes (bloom_filter, minmax)",
+      "table": "events_v4_indexed",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 4.71,
+          "p95_ms": 5.44,
+          "min_ms": 4.18,
+          "max_ms": 5.5,
+          "stdev_ms": 0.47,
+          "engine_ms": 4.55,
+          "rows_read": 90112,
+          "bytes_read": 1261568,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0118
+        },
+        "q2_conversation_lookup": {
+          "p50_ms": 2.89,
+          "p95_ms": 3.67,
+          "min_ms": 2.19,
+          "max_ms": 3.79,
+          "stdev_ms": 0.5,
+          "engine_ms": 2.69,
+          "rows_read": 186479,
+          "bytes_read": 3089776,
+          "result_rows": 8,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q3_platform_wide": {
+          "p50_ms": 13.39,
+          "p95_ms": 14.86,
+          "min_ms": 12.41,
+          "max_ms": 15.38,
+          "stdev_ms": 0.91,
+          "engine_ms": 13.24,
+          "rows_read": 2472486,
+          "bytes_read": 32133510,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0108
+        },
+        "q4_slow_responses": {
+          "p50_ms": 4.2,
+          "p95_ms": 5.07,
+          "min_ms": 3.69,
+          "max_ms": 5.51,
+          "stdev_ms": 0.54,
+          "engine_ms": 3.79,
+          "rows_read": 90112,
+          "bytes_read": 1441792,
+          "result_rows": 13,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        }
+      }
+    },
+    "v5_matview": {
+      "label": "+ Materialized views (pre-aggregation)",
+      "table": "conversation_daily",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 2.05,
+          "p95_ms": 2.41,
+          "min_ms": 1.99,
+          "max_ms": 2.57,
+          "stdev_ms": 0.17,
+          "engine_ms": 1.87,
+          "rows_read": 128,
+          "bytes_read": 21981,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0118
+        },
+        "q3_platform_wide": {
+          "p50_ms": 1.47,
+          "p95_ms": 2.0,
+          "min_ms": 1.39,
+          "max_ms": 2.21,
+          "stdev_ms": 0.25,
+          "engine_ms": 1.3,
+          "rows_read": 91,
+          "bytes_read": 14014,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0066
+        }
+      }
+    },
+    "v6_projection": {
+      "label": "Alternative: projections instead of MV/bloom",
+      "table": "events_v6_projected",
+      "queries": {
+        "q1_tenant_dashboard": {
+          "p50_ms": 5.06,
+          "p95_ms": 5.98,
+          "min_ms": 4.46,
+          "max_ms": 7.77,
+          "stdev_ms": 0.85,
+          "engine_ms": 4.91,
+          "rows_read": 90112,
+          "bytes_read": 1261568,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0118
+        },
+        "q2_conversation_lookup": {
+          "p50_ms": 1.69,
+          "p95_ms": 2.01,
+          "min_ms": 1.5,
+          "max_ms": 2.39,
+          "stdev_ms": 0.26,
+          "engine_ms": 1.6,
+          "rows_read": 24576,
+          "bytes_read": 524288,
+          "result_rows": 8,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        },
+        "q3_platform_wide": {
+          "p50_ms": 14.06,
+          "p95_ms": 15.97,
+          "min_ms": 12.51,
+          "max_ms": 16.26,
+          "stdev_ms": 1.14,
+          "engine_ms": 13.91,
+          "rows_read": 2472784,
+          "bytes_read": 32137384,
+          "result_rows": 7,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0034
+        },
+        "q4_slow_responses": {
+          "p50_ms": 4.39,
+          "p95_ms": 5.49,
+          "min_ms": 3.93,
+          "max_ms": 5.72,
+          "stdev_ms": 0.56,
+          "engine_ms": 4.05,
+          "rows_read": 90112,
+          "bytes_read": 1441792,
+          "result_rows": 13,
+          "matches_baseline": true,
+          "quantile_rel_diff": 0.0
+        }
+      }
+    }
+  },
+  "storage": {
+    "events_v0_naive": {
+      "rows": 12000000,
+      "bytes_on_disk": 1003161221,
+      "uncompressed_bytes": 5075109328,
+      "parts": 1,
+      "compression_ratio": 5.06
+    },
+    "events_v1_typed": {
+      "rows": 12000000,
+      "bytes_on_disk": 405297548,
+      "uncompressed_bytes": 1228971296,
+      "parts": 1,
+      "compression_ratio": 3.03
+    },
+    "events_v2_sorted": {
+      "rows": 12000000,
+      "bytes_on_disk": 399009405,
+      "uncompressed_bytes": 1229131040,
+      "parts": 1,
+      "compression_ratio": 3.08
+    },
+    "events_v3_partitioned": {
+      "rows": 12000000,
+      "bytes_on_disk": 400789978,
+      "uncompressed_bytes": 1229139296,
+      "parts": 3,
+      "compression_ratio": 3.07
+    },
+    "events_v4_indexed": {
+      "rows": 12000000,
+      "bytes_on_disk": 404476016,
+      "uncompressed_bytes": 1229138080,
+      "parts": 3,
+      "compression_ratio": 3.04
+    },
+    "conversation_daily": {
+      "rows": 18010,
+      "bytes_on_disk": 10661561,
+      "uncompressed_bytes": 25314725,
+      "parts": 3,
+      "compression_ratio": 2.37
+    },
+    "events_v6_projected": {
+      "rows": 12000000,
+      "bytes_on_disk": 769982366,
+      "uncompressed_bytes": 1229139328,
+      "parts": 3,
+      "compression_ratio": 1.6
+    },
+    "agent_hourly": {
+      "rows": 1116404,
+      "bytes_on_disk": 28541280,
+      "uncompressed_bytes": 72215139,
+      "parts": 3,
+      "compression_ratio": 2.53
+    },
+    "platform_daily": {
+      "rows": 91,
+      "bytes_on_disk": 233852,
+      "uncompressed_bytes": 375019,
+      "parts": 1,
+      "compression_ratio": 1.6
+    }
+  },
+  "baselines": {
+    "q1_tenant_dashboard": [
+      {
+        "day": "2026-06-01",
+        "events": 11787,
+        "conversations": 1474,
+        "resolutions": 1323,
+        "escalations": 150,
+        "escalation_rate": 0.102,
+        "p95_latency_ms": 2378
+      },
+      {
+        "day": "2026-06-02",
+        "events": 12573,
+        "conversations": 1571,
+        "resolutions": 1439,
+        "escalations": 133,
+        "escalation_rate": 0.085,
+        "p95_latency_ms": 2193
+      },
+      {
+        "day": "2026-06-03",
+        "events": 12022,
+        "conversations": 1503,
+        "resolutions": 1367,
+        "escalations": 135,
+        "escalation_rate": 0.09,
+        "p95_latency_ms": 2465
+      },
+      {
+        "day": "2026-06-04",
+        "events": 11802,
+        "conversations": 1475,
+        "resolutions": 1317,
+        "escalations": 159,
+        "escalation_rate": 0.108,
+        "p95_latency_ms": 2367
+      },
+      {
+        "day": "2026-06-05",
+        "events": 12088,
+        "conversations": 1512,
+        "resolutions": 1359,
+        "escalations": 151,
+        "escalation_rate": 0.1,
+        "p95_latency_ms": 2209
+      },
+      {
+        "day": "2026-06-06",
+        "events": 11783,
+        "conversations": 1472,
+        "resolutions": 1336,
+        "escalations": 137,
+        "escalation_rate": 0.093,
+        "p95_latency_ms": 2605
+      },
+      {
+        "day": "2026-06-07",
+        "events": 12129,
+        "conversations": 1516,
+        "resolutions": 1368,
+        "escalations": 149,
+        "escalation_rate": 0.098,
+        "p95_latency_ms": 2331
+      }
+    ],
+    "q2_conversation_lookup": [
+      {
+        "event_ts": "2026-06-04 22:55:13.700",
+        "event_type": "conversation_started",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 0
+      },
+      {
+        "event_ts": "2026-06-04 22:55:20.476",
+        "event_type": "message_sent",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 0
+      },
+      {
+        "event_ts": "2026-06-04 22:55:27.571",
+        "event_type": "agent_response",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 1111
+      },
+      {
+        "event_ts": "2026-06-04 22:55:34.569",
+        "event_type": "message_sent",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 0
+      },
+      {
+        "event_ts": "2026-06-04 22:55:41.058",
+        "event_type": "agent_response",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 938
+      },
+      {
+        "event_ts": "2026-06-04 22:55:48.480",
+        "event_type": "message_sent",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 0
+      },
+      {
+        "event_ts": "2026-06-04 22:55:55.026",
+        "event_type": "agent_response",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 826
+      },
+      {
+        "event_ts": "2026-06-04 22:56:02.022",
+        "event_type": "resolution",
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "intent": "refund_request",
+        "latency_ms": 0
+      }
+    ],
+    "q3_platform_wide": [
+      {
+        "day": "2026-06-01",
+        "conversations": 16511,
+        "escalations": 2686,
+        "p99_latency_ms": 4082
+      },
+      {
+        "day": "2026-06-02",
+        "conversations": 16682,
+        "escalations": 2716,
+        "p99_latency_ms": 3998
+      },
+      {
+        "day": "2026-06-03",
+        "conversations": 16711,
+        "escalations": 2662,
+        "p99_latency_ms": 3997
+      },
+      {
+        "day": "2026-06-04",
+        "conversations": 16465,
+        "escalations": 2685,
+        "p99_latency_ms": 3996
+      },
+      {
+        "day": "2026-06-05",
+        "conversations": 16649,
+        "escalations": 2680,
+        "p99_latency_ms": 3997
+      },
+      {
+        "day": "2026-06-06",
+        "conversations": 16766,
+        "escalations": 2749,
+        "p99_latency_ms": 4490
+      },
+      {
+        "day": "2026-06-07",
+        "conversations": 16826,
+        "escalations": 2680,
+        "p99_latency_ms": 4015
+      }
+    ],
+    "q4_slow_responses": [
+      {
+        "model": "agent-voice-v1",
+        "channel": "voice",
+        "slow_responses": 55,
+        "p99_latency_ms": 14899
+      },
+      {
+        "model": "agent-lg-v3",
+        "channel": "api",
+        "slow_responses": 22,
+        "p99_latency_ms": 14799
+      },
+      {
+        "model": "agent-lg-v2",
+        "channel": "sms",
+        "slow_responses": 21,
+        "p99_latency_ms": 14499
+      },
+      {
+        "model": "agent-lg-v3",
+        "channel": "email",
+        "slow_responses": 21,
+        "p99_latency_ms": 14499
+      },
+      {
+        "model": "agent-sm-v3",
+        "channel": "email",
+        "slow_responses": 21,
+        "p99_latency_ms": 14899
+      },
+      {
+        "model": "agent-sm-v3",
+        "channel": "api",
+        "slow_responses": 20,
+        "p99_latency_ms": 14199
+      },
+      {
+        "model": "agent-lg-v3",
+        "channel": "sms",
+        "slow_responses": 17,
+        "p99_latency_ms": 14599
+      },
+      {
+        "model": "agent-sm-v3",
+        "channel": "sms",
+        "slow_responses": 16,
+        "p99_latency_ms": 14399
+      },
+      {
+        "model": "agent-sm-v3",
+        "channel": "chat",
+        "slow_responses": 15,
+        "p99_latency_ms": 14799
+      },
+      {
+        "model": "agent-lg-v3",
+        "channel": "chat",
+        "slow_responses": 14,
+        "p99_latency_ms": 14999
+      },
+      {
+        "model": "agent-lg-v2",
+        "channel": "api",
+        "slow_responses": 12,
+        "p99_latency_ms": 13499
+      },
+      {
+        "model": "agent-lg-v2",
+        "channel": "email",
+        "slow_responses": 12,
+        "p99_latency_ms": 14599
+      },
+      {
+        "model": "agent-lg-v2",
+        "channel": "chat",
+        "slow_responses": 10,
+        "p99_latency_ms": 14799
+      }
+    ]
+  },
+  "duration_s": 16.8
+}

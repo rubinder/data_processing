@@ -1,0 +1,160 @@
+# Kafka -> (Flink | Python consumer) -> ClickHouse -> FastAPI
+#
+# Ports are deliberately offset from the other modules in this repo
+# (debezium_deployment already binds 9092, clickhouse_deployment binds 8123,
+# flink_deployment binds 8082) so this stack can run alongside them on the
+# shared data-processing-network.
+
+services:
+  analytics-kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: analytics-kafka
+    hostname: analytics-kafka
+    ports:
+      - "19092:19092"
+    environment:
+      # KRaft: no ZooKeeper. One process is both broker and controller, which
+      # is fine for a single-node dev stack.
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@analytics-kafka:29093
+      KAFKA_LISTENERS: PLAINTEXT://analytics-kafka:9092,CONTROLLER://analytics-kafka:29093,EXTERNAL://0.0.0.0:19092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://analytics-kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # 12 partitions: the ceiling on useful Flink source parallelism, chosen
+      # so parallelism can be raised to 12 without repartitioning the topic.
+      KAFKA_NUM_PARTITIONS: 12
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: nMDvDL9XQTGRWCTgFXcJEQ
+    healthcheck:
+      # Must be the advertised hostname, not localhost: the PLAINTEXT listener
+      # binds to analytics-kafka:9092, so 127.0.0.1:9092 has nothing listening.
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "analytics-kafka:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - data-processing-network
+
+  analytics-clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    container_name: analytics-clickhouse
+    hostname: analytics-clickhouse
+    ports:
+      - "8125:8123"
+      - "9002:9000"
+    environment:
+      # Required, not cosmetic: with neither of these set the official image
+      # logs "disabling network access for user 'default'", so the in-container
+      # client keeps working over localhost while every HTTP client (the API,
+      # the consumer, clickhouse-connect) fails authentication.
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-analytics}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-analytics}"
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - analytics-clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "${CLICKHOUSE_USER:-analytics}",
+             "--password", "${CLICKHOUSE_PASSWORD:-analytics}",
+             "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - data-processing-network
+
+  analytics-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: analytics-api
+    depends_on:
+      analytics-clickhouse:
+        condition: service_healthy
+    ports:
+      - "8500:8500"
+    environment:
+      ANALYTICS_BACKEND: http
+      CLICKHOUSE_HOST: analytics-clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-analytics}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-analytics}"
+      EVENTS_TABLE: conversation_events
+    networks:
+      - data-processing-network
+
+  analytics-flink-jobmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    # PyFlink 1.18 ships no aarch64 wheel, so on Apple Silicon apache-flink
+    # source-builds and fails. Pinning the platform runs these two services
+    # emulated, which is also the architecture they run on in production.
+    platform: linux/amd64
+    container_name: analytics-flink-jobmanager
+    hostname: analytics-flink-jobmanager
+    command: jobmanager
+    depends_on:
+      analytics-kafka:
+        condition: service_healthy
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: analytics-flink-jobmanager
+        jobmanager.memory.process.size: 1600m
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        execution.checkpointing.unaligned: true
+      KAFKA_BOOTSTRAP: analytics-kafka:9092
+      CLICKHOUSE_JDBC_URL: jdbc:clickhouse://analytics-clickhouse:8123/default
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-analytics}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-analytics}"
+    ports:
+      - "8086:8081"
+    volumes:
+      - ./realtime_analytics:/opt/flink-apps/realtime_analytics:ro
+      - analytics-flink-checkpoints:/tmp/flink-checkpoints
+    networks:
+      - data-processing-network
+
+  analytics-flink-taskmanager:
+    build:
+      context: .
+      dockerfile: Dockerfile.flink
+    platform: linux/amd64
+    command: taskmanager
+    depends_on:
+      - analytics-flink-jobmanager
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: analytics-flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+        taskmanager.memory.process.size: 2560m
+        state.checkpoints.dir: file:///tmp/flink-checkpoints
+        execution.checkpointing.unaligned: true
+      KAFKA_BOOTSTRAP: analytics-kafka:9092
+      CLICKHOUSE_JDBC_URL: jdbc:clickhouse://analytics-clickhouse:8123/default
+      CLICKHOUSE_USER: "${CLICKHOUSE_USER:-analytics}"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-analytics}"
+    volumes:
+      - ./realtime_analytics:/opt/flink-apps/realtime_analytics:ro
+      - analytics-flink-checkpoints:/tmp/flink-checkpoints
+    networks:
+      - data-processing-network
+
+volumes:
+  analytics-clickhouse-data:
+  analytics-flink-checkpoints:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

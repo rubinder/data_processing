@@ -1,0 +1,37 @@
+[project]
+name = "realtime-analytics"
+version = "0.1.0"
+description = "Kafka -> PyFlink -> ClickHouse analytics for AI agent conversation events"
+requires-python = ">=3.10"
+dependencies = [
+    "clickhouse-connect>=0.7.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "kafka-python>=2.0.2",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+# Embedded ClickHouse: lets the whole test suite and the benchmark run without
+# a server. Same engine, in-process.
+test = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+    "chdb>=2.0.0",
+]
+# PyFlink is a large install and is only needed to submit the streaming job;
+# the Flink SQL/tuning tests run without it.
+flink = [
+    "apache-flink==1.18.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["realtime_analytics"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
