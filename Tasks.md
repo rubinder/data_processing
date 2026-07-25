@@ -76,6 +76,34 @@ Complete the following under different folders
         - [x] docker-compose.yaml (external data-processing-network), deploy.sh (up|down|restart|status|logs|schema|load-data|query), uv pyproject.toml, README.md
         - [x] pytest tests: analytical SQL executed against embedded ClickHouse (chdb) + mocked-request loader tests (6 passing)
 
+    - [x] Real-time Analytics under realtime_analytics (Kafka + PyFlink + ClickHouse + FastAPI)
+        - [x] AI agent conversation event model (conversation_started, message_sent, agent_response, resolution, escalation) across chat/voice/email/sms/api channels, multi-tenant by account_id
+        - [x] Kafka producer keyed by conversation_id (per-conversation ordering) with deliberate late-event injection for watermark testing
+        - [x] Simple Python Kafka -> ClickHouse consumer: batched inserts, flush deadline, offsets committed after insert (at-least-once)
+        - [x] PyFlink streaming job: Kafka source -> 1-minute event-time tumbling rollup -> Kafka, verified running on the cluster (1,321 windows emitted and ingested, all minute-aligned, counters internally consistent)
+        - [x] ClickHouse Kafka table engine + materialized views for ingest (20_kafka_ingest.sql raw path, 21_flink_rollup_ingest.sql for the Flink rollup); chosen because flink-connector-jdbc ships no ClickHouse dialect at any released version, so a JDBC sink cannot be built without custom Java
+        - [x] Full stack validated end-to-end on Docker: 106,106 events Kafka -> ClickHouse with exact materialized-view reconciliation, API p95 8.47ms over HTTP against the 100ms SLO
+        - [x] Documented Flink tuning: parallelism vs partition count, watermark/out-of-orderness, checkpoint interval + min-pause + unaligned checkpoints, RocksDB vs heap state, mini-batch and two-phase aggregation for hot keys, source idle timeout
+        - [x] Staged ClickHouse schemas measured one variable at a time: 00 naive, 01 types+codecs, 02 sorting key, 03 partitioning, 04 skipping indexes, 05 materialized views, 06 projections alternative
+        - [x] Production schema (10_production.sql): ReplacingMergeTree for at-least-once dedup, monthly partitioning, bloom filters, TTL 90d raw / 730d aggregates, three materialized views
+        - [x] benchmarks/bench_clickhouse.py: interleaved warm-cache rounds, engine-reported rows_read/bytes_read, every stage verified to match the naive baseline before a speedup is reported
+        - [x] benchmarks/bench_partitioning.py: partition granularity (none/monthly/weekly/daily) measured for pruning benefit vs per-part cost
+        - [x] benchmarks/bench_api.py: end-to-end API p50/p95/p99 against the 100ms SLO, runnable without Docker
+        - [x] FastAPI service reading materialized views, bound query parameters, capped lookback windows, Prometheus /metrics
+        - [x] docker-compose (Kafka KRaft, ClickHouse, Flink JM/TM, API), Dockerfile, Dockerfile.flink with connector JARs, deploy.sh, .env.example, uv pyproject
+        - [x] pytest suite against real embedded ClickHouse (chdb): schema-variant equality, index pruning, MV correctness, ReplacingMergeTree dedup, API behaviour, Flink SQL/tuning
+        - [x] Self-contained README documenting the measured tuning journey, ClickHouse vs Redshift reasoning, partitioning and materialized view strategy, SLOs/runbook, and the negative results
+
+    - [x] Iceberg Deployment under iceberg_deployment (Apache Iceberg table format on Spark 3.5)
+        - [x] session.py with two catalogs: filesystem (no services, used by tests) and REST-on-S3/MinIO (production shape); pins PYSPARK_PYTHON to sys.executable so venv driver/worker versions cannot diverge
+        - [x] Iceberg table over the impression event model with hidden partitioning (days(event_ts), page_type) and format-version 2 merge-on-read
+        - [x] schema_evolution.py: documented compatibility policy (safe: add/rename/drop/reorder/widen; rejected: narrowing, nullable->required, unrelated type change) plus partition-spec evolution
+        - [x] time_travel.py: snapshot listing, VERSION/TIMESTAMP AS OF, rollback_to_snapshot, cherrypick for write-audit-publish
+        - [x] upserts.py: MERGE INTO composed from the live schema (survives renames), idempotent replay, row-level DELETE
+        - [x] maintenance.py: rewrite_data_files compaction, rewrite_manifests, expire_snapshots with a retain floor, remove_orphan_files
+        - [x] demo.py six-step printed walkthrough; docker-compose (Iceberg REST + MinIO), deploy.sh, README, uv pyproject
+        - [x] 22 pytest tests against real Iceberg tables: rename preserves field ID and data, drop-then-re-add does not resurrect values, narrowing rejected, evolution rewrites zero data files, partition specs coexist, rollback restores state, MERGE replay idempotent, compaction reduces files while preserving records
+
 ---
 
 ## Staff-Level Hardening Backlog
@@ -92,7 +120,7 @@ should ship with a short written narrative of the issue and its resolution
 - [x] dbt: use safe casts (`macros/safe_casts.sql`) so one malformed row doesn't fail the model; warn-level not_null on `event_date`
 - [ ] Introduce a Schema Registry (Avro/Protobuf) for the Debezium → Kafka path with an explicit compatibility mode (needs infra)
 - [ ] Wire Debezium → Schema Registry → Flink and demonstrate surviving a source `ALTER TABLE` (add/rename/drop column) gracefully (needs infra)
-- [ ] Adopt Delta/Iceberg with column mapping + a deliberate `mergeSchema`/`overwriteSchema` policy for evolving tables (quarantine Delta write already uses `mergeSchema`)
+- [x] Adopt Delta/Iceberg with column mapping + a deliberate schema-evolution policy for evolving tables — done in `iceberg_deployment/` (field-ID based evolution, documented safe/unsafe operation policy, 22 tests asserting old data still reads correctly after rename/drop/re-add)
 - [ ] dbt: add model contracts + `dbt source freshness` (needs a `loaded_at` column added to `raw.impressions`)
 
 ### #2 — ETL performance & correctness (HIGHEST PRIORITY — mostly done, see spark_applications/DECISIONS.md)
