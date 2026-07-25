@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-07-25T15:25:12",
+  "mode": "embedded",
+  "events_loaded": 400000,
+  "requests_per_endpoint": 200,
+  "slo_p95_ms": 100.0,
+  "worst_p95_ms": 1.19,
+  "slo_met": true,
+  "endpoints": [
+    {
+      "path": "/v1/accounts/acct_0000/summary?days=7",
+      "requests": 200,
+      "status_codes": [
+        503
+      ],
+      "p50_ms": 0.91,
+      "p95_ms": 1.0,
+      "p99_ms": 1.08,
+      "max_ms": 1.09,
+      "mean_ms": 0.93
+    },
+    {
+      "path": "/v1/accounts/acct_0000/summary?days=30",
+      "requests": 200,
+      "status_codes": [
+        503
+      ],
+      "p50_ms": 0.96,
+      "p95_ms": 1.13,
+      "p99_ms": 1.34,
+      "max_ms": 1.64,
+      "mean_ms": 0.99
+    },
+    {
+      "path": "/v1/accounts/acct_0000/agent-latency?hours=168",
+      "requests": 200,
+      "status_codes": [
+        503
+      ],
+      "p50_ms": 1.0,
+      "p95_ms": 1.09,
+      "p99_ms": 1.17,
+      "max_ms": 1.18,
+      "mean_ms": 1.02
+    },
+    {
+      "path": "/v1/accounts/acct_0000/hourly?hours=168",
+      "requests": 200,
+      "status_codes": [
+        503
+      ],
+      "p50_ms": 1.04,
+      "p95_ms": 1.12,
+      "p99_ms": 1.23,
+      "max_ms": 1.28,
+      "mean_ms": 1.06
+    },
+    {
+      "path": "/v1/accounts/acct_0000/intents?days=7",
+      "requests": 200,
+      "status_codes": [
+        503
+      ],
+      "p50_ms": 1.09,
+      "p95_ms": 1.17,
+      "p99_ms": 1.26,
+      "max_ms": 1.27,
+      "mean_ms": 1.1
+    },
+    {
+      "path": "/v1/conversations/b38f3041-1bd9-6391-c6a7-562329e8a29f",
+      "requests": 200,
+      "status_codes": [
+        503
+      ],
+      "p50_ms": 1.11,
+      "p95_ms": 1.19,
+      "p99_ms": 1.27,
+      "max_ms": 1.28,
+      "mean_ms": 1.12
+    }
+  ]
+}

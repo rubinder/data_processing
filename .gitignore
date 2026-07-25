@@ -1,0 +1,32 @@
+# Added by code-review-graph
+.code-review-graph/
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# DuckDB local database artifacts
+*.duckdb
+*.duckdb.wal
+
+# Iceberg local warehouse (created by the demo / a bare session)
+iceberg-warehouse/
+
+# Local environment file. .env.example is the tracked template; copy it to
+# .env and fill in real values, which must never be committed.
+.env
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+
+# Local MCP server config (contains machine-specific absolute paths)
+.mcp.json
+
+# graphify generated cache
+graphify-out/cache/
+graphify-out/.graphify_python

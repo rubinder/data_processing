@@ -1,0 +1,52 @@
+# Flink image with PyFlink and the connector JARs this job needs.
+FROM flink:1.18.1-scala_2.12-java11
+
+USER root
+
+# PyFlink 1.18 supports Python 3.7-3.10 only, and the flink:1.18.1 base image is
+# now Debian bookworm, whose only apt Python is 3.11. Installing it that way
+# fails while building apache-flink's dependencies ("Getting requirements to
+# build wheel: error"), so a standalone CPython 3.10 is fetched with uv instead.
+# This keeps the image self-contained -- no external PPA, no source build.
+RUN curl -LsSf https://astral.sh/uv/install.sh \
+        | env UV_INSTALL_DIR=/usr/local/bin sh
+
+# UV_PYTHON_INSTALL_DIR matters: by default uv puts the standalone interpreter
+# under /root/.local, which is mode 0700, so the `flink` user this image runs as
+# gets "Cannot run program python3: error=13, Permission denied" at submit time.
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+
+RUN uv python install 3.10 && \
+    uv venv --python 3.10 /opt/pyflink-venv && \
+    uv pip install --python /opt/pyflink-venv/bin/python \
+        --no-cache apache-flink==1.18.1 && \
+    chmod -R a+rX /opt/uv-python /opt/pyflink-venv
+
+# Put the venv first on PATH so Flink's default `python`/`python3` resolve to
+# the 3.10 interpreter that has PyFlink installed.
+ENV PATH=/opt/pyflink-venv/bin:$PATH
+
+ARG KAFKA_CONNECTOR_VERSION=3.1.0-1.18
+ARG JDBC_CONNECTOR_VERSION=3.1.2-1.18
+ARG CLICKHOUSE_JDBC_VERSION=0.6.3
+
+# Flink ships without connectors; a missing JAR surfaces at submit time as an
+# unhelpful "Could not find any factory for identifier 'kafka'".
+RUN set -eux; \
+    cd /opt/flink/lib; \
+    base=https://repo1.maven.org/maven2; \
+    curl -fL -o flink-sql-connector-kafka.jar \
+        "$base/org/apache/flink/flink-sql-connector-kafka/${KAFKA_CONNECTOR_VERSION}/flink-sql-connector-kafka-${KAFKA_CONNECTOR_VERSION}.jar"; \
+    curl -fL -o flink-connector-jdbc.jar \
+        "$base/org/apache/flink/flink-connector-jdbc/${JDBC_CONNECTOR_VERSION}/flink-connector-jdbc-${JDBC_CONNECTOR_VERSION}.jar"; \
+    curl -fL -o clickhouse-jdbc.jar \
+        "$base/com/clickhouse/clickhouse-jdbc/${CLICKHOUSE_JDBC_VERSION}/clickhouse-jdbc-${CLICKHOUSE_JDBC_VERSION}-all.jar"
+
+# Create the checkpoint directory owned by `flink` *in the image*. A named
+# volume mounted over a path that does not exist in the image is created
+# root-owned, and the job then dies at submit time with
+# "Failed to create directory for shared state". Docker seeds a fresh volume
+# from the image directory, ownership included, so this fixes it at the source.
+RUN mkdir -p /tmp/flink-checkpoints && chown -R flink:flink /tmp/flink-checkpoints
+
+USER flink

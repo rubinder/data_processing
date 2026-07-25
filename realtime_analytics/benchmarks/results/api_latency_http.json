@@ -1,0 +1,83 @@
+{
+  "generated_at": "2026-07-25T15:55:53",
+  "mode": "http",
+  "events_loaded": null,
+  "requests_per_endpoint": 200,
+  "slo_p95_ms": 100.0,
+  "worst_p95_ms": 8.47,
+  "slo_met": true,
+  "endpoints": [
+    {
+      "path": "/v1/accounts/acct_0000/summary?days=7",
+      "requests": 200,
+      "status_codes": [
+        200
+      ],
+      "p50_ms": 5.37,
+      "p95_ms": 6.32,
+      "p99_ms": 7.72,
+      "max_ms": 7.76,
+      "mean_ms": 5.46
+    },
+    {
+      "path": "/v1/accounts/acct_0000/summary?days=30",
+      "requests": 200,
+      "status_codes": [
+        200
+      ],
+      "p50_ms": 5.47,
+      "p95_ms": 7.83,
+      "p99_ms": 16.82,
+      "max_ms": 21.8,
+      "mean_ms": 5.8
+    },
+    {
+      "path": "/v1/accounts/acct_0000/agent-latency?hours=168",
+      "requests": 200,
+      "status_codes": [
+        200
+      ],
+      "p50_ms": 5.92,
+      "p95_ms": 7.75,
+      "p99_ms": 9.93,
+      "max_ms": 16.21,
+      "mean_ms": 6.09
+    },
+    {
+      "path": "/v1/accounts/acct_0000/hourly?hours=168",
+      "requests": 200,
+      "status_codes": [
+        200
+      ],
+      "p50_ms": 5.13,
+      "p95_ms": 6.78,
+      "p99_ms": 9.82,
+      "max_ms": 14.98,
+      "mean_ms": 5.26
+    },
+    {
+      "path": "/v1/accounts/acct_0000/intents?days=7",
+      "requests": 200,
+      "status_codes": [
+        200
+      ],
+      "p50_ms": 6.05,
+      "p95_ms": 8.15,
+      "p99_ms": 9.78,
+      "max_ms": 9.87,
+      "mean_ms": 6.28
+    },
+    {
+      "path": "/v1/conversations/3d755eff-85fa-f035-b777-17a7c5b447fb",
+      "requests": 200,
+      "status_codes": [
+        200
+      ],
+      "p50_ms": 4.3,
+      "p95_ms": 8.47,
+      "p99_ms": 14.85,
+      "max_ms": 18.12,
+      "mean_ms": 4.76
+    }
+  ]
+}
