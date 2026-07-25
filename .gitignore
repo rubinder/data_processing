@@ -14,6 +14,10 @@ __pycache__/
 # Iceberg local warehouse (created by the demo / a bare session)
 iceberg-warehouse/
 
+# Local environment file. .env.example is the tracked template; copy it to
+# .env and fill in real values, which must never be committed.
+.env
+
 # macOS
 .DS_Store
 
