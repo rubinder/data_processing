@@ -5,6 +5,87 @@ mattered, and what was done. New entries go at the top.
 
 ---
 
+## #7 — Debuggability (worked cases, plan analysis)
+
+**Area:** `spark_applications/debugging/`, `DEBUGGING.md`
+
+### Symptoms / risk
+
+The repo demonstrated *correct* pipelines but nothing about diagnosing them
+when they misbehave. The performance decisions in #2 (dynamic partition
+overwrite, explicit schemas, `_compact`, AQE) were asserted in prose with no
+reproducible evidence, and the two open #2 follow-ups — wiring salting into a
+real hot key, and before/after shuffle metrics — had no vehicle short of a
+cluster run.
+
+### Resolution
+
+Seven runnable cases over the impression model, each reproducing a pathology,
+capturing the plan evidence that identifies it, applying a fix, and capturing
+the plan again: skewed join, driver OOM, lost partition pruning, small-files
+explosion, `AMBIGUOUS_REFERENCE`, `PythonException` from a UDF, and Python UDF
+to pandas UDF.
+
+`debugging/explain_tools.py` is the reusable core: `capture_plan` /
+`capture_final_plan`, plus parsers for join strategies, exchange counts and
+their partitioning schemes, `PartitionFilters` / `PushedFilters`, Python eval
+operators, AQE shuffle reads, and runtime scan metrics. The parsers take plan
+*text*, so they unit-test against captured fixtures with no SparkSession.
+
+Three findings that contradict common advice, each pinned by a test:
+
+- **Casts do not break partition pruning** in Spark 3.5.
+  `(cast(hour#656 as int) = 10)` appears inside `PartitionFilters`, as do
+  `to_date()` and `substring()`. UDFs break it; casts do not. This validates
+  `aggregation.py`'s `hour.cast("int")`, which the received wisdom would have
+  had us contort.
+- **AQE did not split the skewed partition** — it reported
+  `AQEShuffleRead coalesced` only, because the partitions sit under
+  `skewedPartitionThresholdInBytes` (256MB). AQE alone is not a skew strategy,
+  which qualifies the "Skew — AQE + adaptive skew-join enabled" row in #2.
+- **The `_compact` repartition is free** in the common case. Measured
+  `Exchange` count is unchanged (1 → 1): Spark collapses the redundant
+  repartition, so the fix changes an existing shuffle's scheme from
+  `RoundRobinPartitioning` to `hashpartitioning` rather than adding a shuffle.
+
+Also documented: `explain()` shows the *initial* plan, so AQE rewrites are
+invisible in it — and the final plan attaches only to the DataFrame object you
+executed, so `count()` and `noop` writes leave it `isFinalPlan=false` while
+`collect()` populates it. This is the usual reason AQE looks inert.
+
+### Measured
+
+| Case | Broken | Fixed |
+| ---- | ------ | ----- |
+| 01 skewed join | `SortMergeJoin`, 3 exchanges | `BroadcastHashJoin`, 1 exchange |
+| 02 driver collect | 2,000 rows to driver | 1 row, constant |
+| 03 pruning | 72 files / 9 partitions | 24 files / 3 partitions |
+| 04 small files | 432 files (16/dir) | 27 files (1/dir) |
+| 06 trace noise | 141 lines / 104 Scala frames | 2 lines that matter |
+| 07 pandas UDF | `BatchEvalPython`, 0.99s | `ArrowEvalPython`, 0.47s |
+
+### Verification
+
+`tests/test_debugging_explain_tools.py` (26 tests, no Spark) and
+`tests/test_debugging_cases.py` (30 tests, real Spark). The case tests assert
+the *claim* of each case — the plan changes in the stated way and both paths
+return identical results — so a future Spark version that changes this
+behaviour fails the suite rather than leaving a quietly false writeup. Full
+suite: 81 passed.
+
+`pandas` / `pyarrow` / `setuptools` added to `pyproject.toml` for the case 07
+Arrow path (pyspark 3.5's version check imports `distutils`, absent on Python
+3.12+).
+
+### Follow-ups (tracked in Tasks.md)
+
+- Wire the case 01 broadcast/salting conclusion into `aggregation.py`'s real
+  hot-key path.
+- Re-measure cases 01 and 07 on a real cluster, where per-row and network
+  costs are not understated by `local[*]`.
+
+---
+
 ## #4 — Orchestration maturity (Airflow)
 
 **Area:** `airflow_deployment/dags/impression_pipeline.py`

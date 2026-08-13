@@ -131,8 +131,11 @@ should ship with a short written narrative of the issue and its resolution
 - [x] Add `repartition` before partitioned writes to avoid the small-files explosion at hour grain (`_compact`)
 - [x] `aggregation.py`: filter on partition columns for pruning + fix `hour` string/int typing
 - [x] Enable AQE / adaptive skew-join at the session level (`utils/session.py`)
-- [ ] Wire salting (`salted_join.py`) into the real hot-key path in `aggregation.py`; tune broadcast thresholds
-- [ ] Write up before/after shuffle + runtime metrics (needs a real cluster run)
+- [x] Worked debugging cases with before/after query plans and measured evidence — `spark_applications/debugging/` + `DEBUGGING.md` (see DECISIONS.md #7). Covers skew/join-strategy, driver OOM, partition pruning, small files, `AMBIGUOUS_REFERENCE`, `PythonException`, and Python UDF → pandas UDF. 56 tests.
+- [x] Reusable plan-analysis helpers (`debugging/explain_tools.py`): captures the post-AQE *final* plan that `explain()` does not show; parses join strategies, exchange counts + partitioning schemes, `PartitionFilters`/`PushedFilters`, Python-eval operators, runtime scan metrics
+- [ ] Wire salting (`salted_join.py`) into the real hot-key path in `aggregation.py`; tune broadcast thresholds (case 01 establishes broadcast-first as the conclusion to apply)
+- [ ] Re-measure debugging cases 01 and 07 on a real cluster — `local[*]` understates per-row and network costs, and keeps partitions under AQE's 256MB skew threshold
+- [ ] Write up before/after shuffle + runtime metrics for the production jobs (needs a real cluster run)
 
 ### #3 — Idempotency, reliability, data quality (partially done, see spark_applications/DECISIONS.md)
 - [x] Retry + backoff on the API pull (`fetch_impression_data`)
