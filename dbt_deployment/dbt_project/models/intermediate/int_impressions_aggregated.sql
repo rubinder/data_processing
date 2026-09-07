@@ -4,6 +4,11 @@
 */
 with impressions as (
     select * from {{ ref('stg_impressions') }}
+    -- Rows whose source date failed the safe cast (event_date is NULL) are
+    -- surfaced by the warn-level test on stg_impressions and stop here: the
+    -- analytics tables group by event_date, and a NULL partition would fail
+    -- their not_null contracts and pollute every hourly rollup.
+    where event_date is not null
 ),
 
 aggregated as (

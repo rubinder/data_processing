@@ -13,9 +13,22 @@ x-airflow-common: &airflow-common
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
     AIRFLOW_CONN_SPARK_LOCAL: spark://spark%3A%2F%2Fspark-master%3A7077
     AIRFLOW_CONN_AWS_DEFAULT: aws://
+    # Shared data root: the local Spark jobs write status files and raw
+    # manifests under it and impression_quality_checks reads them.
+    PIPELINE_DATA_DIR: /opt/airflow/data
+    SPARK_MODE: ${SPARK_MODE:-local}
+    # OpenLineage (lineage_deployment/). Disabled unless OPENLINEAGE_URL is
+    # set in ../.env; then every task run is reported to Marquez and the
+    # SparkSubmitOperator passes the parent-run facet to the Spark job.
+    AIRFLOW__OPENLINEAGE__DISABLED: ${OPENLINEAGE_DISABLED:-true}
+    AIRFLOW__OPENLINEAGE__NAMESPACE: ${OPENLINEAGE_NAMESPACE:-data_processing}
+    AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type": "http", "url": "${OPENLINEAGE_URL:-http://marquez-api:5000}"}'
   volumes:
     - ./dags:/opt/airflow/dags
     - airflow-logs:/opt/airflow/logs
+    # Same host directory the local Spark cluster mounts, so
+    # PIPELINE_DATA_DIR resolves to the same files in both containers.
+    - ../data:/opt/airflow/data
   depends_on:
     postgres:
       condition: service_healthy

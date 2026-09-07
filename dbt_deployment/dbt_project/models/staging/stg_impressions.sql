@@ -16,7 +16,8 @@ cleaned as (
         second,
         event_type,
         {{ safe_event_timestamp('date', 'hour', 'min', 'second') }}
-            as event_timestamp
+            as event_timestamp,
+        loaded_at
     from source
 )
 

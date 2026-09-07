@@ -15,6 +15,7 @@ from datetime import datetime
 
 import psycopg2
 import requests
+from datetime import timezone
 
 
 def get_db_connection():
@@ -48,9 +49,13 @@ def load_impressions(api_base_url: str, page_type: int, date: str, hour: int):
         (page_type, date, hour),
     )
 
+    # One loaded_at per batch (not per row, not the column default) so
+    # `dbt source freshness` measures when the *pull* happened and every row
+    # of an hour carries the same watermark.
+    loaded_at = datetime.now(timezone.utc)
     insert_sql = """
-        INSERT INTO raw.impressions (user_id, impression_id, page_type, date, hour, min, second, event_type)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO raw.impressions (user_id, impression_id, page_type, date, hour, min, second, event_type, loaded_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
     """
     batch = [
         (
@@ -62,6 +67,7 @@ def load_impressions(api_base_url: str, page_type: int, date: str, hour: int):
             int(row["min"]),
             int(row["second"]),
             row["event_type"],
+            loaded_at,
         )
         for row in rows
     ]

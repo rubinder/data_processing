@@ -505,3 +505,151 @@ all three implementations agree.
 the stdlib in Python 3.12. `setuptools` is a declared dependency so the pandas
 UDF path in case 07 works on 3.12+ interpreters as well as the project's
 stated 3.10 baseline.
+
+---
+
+## Production jobs — plan-level before/after (local; cluster runtime pending)
+
+`debugging/production_metrics.py` runs the real `aggregation.enrich_with_users`
++ `aggregate_impressions` path under four configurations. Plan shape is exact
+at any scale; the seconds column is `local[*]` and directional only. The
+cluster protocol and the empty runtime table to fill in are in
+`debugging/CLUSTER_RUN.md`.
+
+Measured at 200,000 events, 80% on one `user_id`, 8 shuffle partitions:
+
+| scenario | join | exchanges | shuffle on | AQE skew split | seconds |
+| --- | --- | --- | --- | --- | --- |
+| baseline (no enrichment) | none | 4 | aggregation keys | no | 1.25 |
+| before: plain join, case-01 conditions | `SortMergeJoin` | 2 | `user_id` (both sides) | no | 0.96 |
+| broadcast (shipped default) | `BroadcastHashJoin` | 4 | aggregation keys only | no | 0.38 |
+| salted (broadcast unavailable) | `SortMergeJoin` | 8 | `salted_key` (both sides), then aggregation keys | no | 0.57 |
+
+Reading it:
+
+- **"before" has the fewest exchanges and is the worst plan.** Both join
+  sides are hash-partitioned on `user_id`, and because `user_id` is a prefix of
+  the aggregation key Spark reuses that partitioning for the `groupBy`. Every
+  downstream stage therefore inherits the skew: 80% of the rows sit in one
+  partition from the join through the aggregate. Fewer shuffles is not the
+  goal; even shuffles are.
+- **broadcast removes the join's shuffles entirely.** The only exchanges left
+  are the aggregation's own (hash-partitioned on the full grouping key, which
+  includes `impression_id` and is not skewed). The hint means the plan does
+  not depend on Spark's size estimate of the dimension, which is what made the
+  "before" plan possible in the first place.
+- **salted pays for its safety in exchanges.** Two shuffles on `salted_key`
+  (even, by construction) plus the aggregation's. It is the right plan only
+  when the dimension is too large to broadcast; `--join-strategy salted`
+  selects it and `SALT_RANGE` bounds the small-side explosion.
+- **AQE split nothing in every leg.** The partitions are well under the 64MB
+  threshold now set in `utils/session.py` (256MB Spark default). This is the
+  laptop artefact CLUSTER_RUN.md exists to remove; the wall-clock deltas are
+  not evidence until re-measured there.
+
+Verification: `tests/test_aggregation.py` pins the broadcast plan (including
+with `autoBroadcastJoinThreshold=-1`), the salted plan's `salted_key`
+partitioning, and that both strategies produce identical aggregates.
+
+---
+
+## Cluster re-measurement (EMR 7.13, 2026-09-06)
+
+Run with `debugging/cluster_measure.py` on the stack's cluster: 1 master + 2
+core (on demand) + 1 task (Spot), all m5.xlarge; `spark.executor.instances=3`,
+4g each, 2 cores; `spark.sql.shuffle.partitions=200`; driver 6g in client
+mode. Numbers come from the driver's REST API (heaviest stage per leg); the
+raw step output is in the EMR step logs of `j-038189715ZSG6YZ59Z0F`.
+
+### Case 01 at 20,000,000 rows, 80% on one user_id
+
+| leg | wall-clock s | join | task max / median s | shuffle read max / median MB | AQE skew split |
+| --- | --- | --- | --- | --- | --- |
+| broken (SMJ conf, no AQE) | 24.1 | `ShuffledHashJoin` | 8.3 / 0.1 (77x) | 24.7 / 0.1 (210x) | no |
+| "fixed" (10MB broadcast threshold) | 9.7 | `ShuffledHashJoin` | 5.4 / 0.1 (100x) | 24.7 / 0.1 (209x) | no |
+| AQE only | 6.6 | `ShuffledHashJoin` | 6.1 / 0.5 (13x) | 24.7 / 7.2 (3.4x) | no |
+
+Three things the laptop could not show:
+
+- **The skew is real and the numbers are the textbook shape.** One task read
+  210x the median partition and ran 77x longer; the other 199 finished in a
+  tenth of a second. That is the "199 of 200 tasks finish in seconds" symptom
+  reproduced on real hardware, and at this size it costs 24 seconds, not 40
+  minutes; scale it by 10 and the straggler is minutes while everything else
+  is still seconds.
+- **The 10MB threshold did not broadcast the dimension on EMR.** Locally the
+  same configuration planned a `BroadcastHashJoin`; on the cluster Spark
+  planned `ShuffledHashJoin` for every leg and the "fixed" leg carried the
+  full skew (100x). EMR's Spark defaults differ from a bare Spark (among them
+  `spark.sql.join.preferSortMergeJoin=false`, which is why the operator is a
+  shuffled hash join rather than sort-merge), and the dimension's size
+  estimate evidently did not clear the threshold. This is exactly the
+  resolution note in case 01: when Spark declines to broadcast a small side,
+  do not rely on the estimate, hint it. `aggregation.enrich_with_users` uses
+  `broadcast()`; the production legs below show what that buys.
+- **AQE coalesced but did not split.** The hot partition is 24.7MB of shuffle
+  read, under both the 256MB EMR default and the 64MB now set in
+  `utils/session.py`, so AQE's skew split has nothing to act on and the
+  straggler survives (13x). It still helped: coalescing the other 199
+  partitions made the stage 4x faster than the broken leg. To see a split at
+  this row count the threshold would have to drop to ~16MB, or rows go up
+  ~5x. AQE is a mitigation for the long tail, not a fix for one hot key.
+
+### Production aggregation at 20,000,000 rows, 80% on one user_id
+
+| leg | wall-clock s | join | task max / median s | shuffle read max / median MB | disk spill MB |
+| --- | --- | --- | --- | --- | --- |
+| before: plain join, case-01 conditions | 59.7 | `ShuffledHashJoin` | 36.9 / 0.1 (677x) | 215.2 / 0.3 (668x) | 189.4 |
+| broadcast (shipped default, hinted) | 20.5 | `BroadcastHashJoin` | 1.4 / 1.0 (1.3x) | 3.1 / 3.1 (1.0x) | 0.0 |
+| salted (`--join-strategy salted`) | 15.0 | `ShuffledHashJoin` | 3.5 / 0.8 (4.4x) | 23.3 / 13.8 (1.7x) | 0.0 |
+
+- **The "before" leg is the incident.** One task read 215MB while the median
+  read 0.3MB, ran for 37 seconds while the median took 0.1, and spilled 189MB
+  to disk on the way: the executor's 4g was not enough for the hot key's rows
+  plus the hash relation, so it spilled and the stage took 60 seconds. Give it
+  10x the rows and this is the `ExecutorLostFailure` in case 01's symptom.
+- **The `broadcast()` hint did what the threshold could not.** Unlike case
+  01's "fixed" leg, the plan is a `BroadcastHashJoin` and every task is the
+  same size (1.3x). The shuffle that remains is the aggregation's own, on the
+  full unskewed key. This is the plan the pipeline ships with.
+- **Salted was fastest here, by 5 seconds.** Both non-skewed legs are within
+  the noise of a three-executor cluster, but the direction is real: the salted
+  join's two exchanges on `salted_key` cost less than broadcasting the
+  dimension to every task *and* Spark planned the salted probe as a shuffled
+  hash join with AQE coalescing the 200 partitions to a handful (median read
+  13.8MB). Its 4.4x task ratio is the residual unevenness of `salt_range=10`
+  on an 80% key, not a straggler. At this dimension size broadcast is still
+  the default, for the reason case 01 gives: one code path, no exploded side,
+  and a plan that does not depend on `SALT_RANGE` matching the skew.
+
+### Case 07 at 10,000,000 rows
+
+| leg | wall-clock s | task max / median s |
+| --- | --- | --- |
+| Python UDF (`BatchEvalPython`) | 12.9 | 11.1 / 10.8 |
+| pandas UDF (`ArrowEvalPython`) | 8.2 | 7.9 / 4.3 |
+| native column functions | 1.6 | 1.4 / 1.4 |
+
+- **Native is 8x the Python UDF and 5x the pandas UDF.** The row-at-a-time
+  UDF spends 11 seconds per task moving 10M rows through the pickling
+  boundary; the built-in expression does the same work inside the JVM in
+  1.4. The order is the one the case predicts; the size of the gap between
+  the two Python paths is not.
+- **pandas UDF was only 1.6x faster than the plain UDF here**, less than the
+  integer factor CLUSTER_RUN.md expected. The UDF in case 07 is cheap per
+  row, so Arrow's saving (batching the transfer) is a large share of the
+  Python UDF's cost but the per-batch Python work still dominates on two
+  cores per executor. The lesson holds, with a sharper edge: vectorising
+  buys a constant factor, dropping to native buys an order of magnitude.
+- **Measuring this leg needed two fixes to the harness**, both instructive.
+  With the default 384MB executor memory overhead the Python workers were
+  killed and the job died with `EOFException` from the worker socket
+  (`spark.executor.memoryOverhead=2g` fixed it: Python workers live in the
+  overhead, not the JVM heap). And `explain_tools.capture_final_plan`
+  collects the DataFrame to force execution, which for a row-level frame
+  means 10M rows to the driver; the measurement script now reads the
+  executed plan back from the Spark REST API instead. Case 02 in one line.
+
+Harness: `debugging/cluster_measure.py`; how it was run is in
+`debugging/CLUSTER_RUN.md`; the deployment it ran on is
+`aws_deployment/cloudformation/main.yaml` (DECISIONS.md #8).

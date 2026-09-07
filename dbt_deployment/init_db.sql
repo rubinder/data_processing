@@ -9,5 +9,8 @@ CREATE TABLE IF NOT EXISTS raw.impressions (
     hour INTEGER,
     min INTEGER,
     second INTEGER,
-    event_type VARCHAR(1)
+    event_type VARCHAR(1),
+    -- When the loader wrote the row. One value per (page_type, date, hour)
+    -- batch. Drives `dbt source freshness` (see models/staging/schema.yml).
+    loaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

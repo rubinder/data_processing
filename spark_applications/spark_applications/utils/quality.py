@@ -6,6 +6,7 @@ not match the contract is routed to a quarantine location; the rest of the
 batch still lands.
 """
 
+import statistics
 from dataclasses import dataclass
 
 from pyspark.sql import Column, DataFrame, Window
@@ -92,4 +93,112 @@ def reconcile_counts(
             f"{label}: row-count reconciliation failed — expected "
             f"{expected}, got {actual} (drift {drift:.2%} > "
             f"tolerance {tolerance:.2%})"
+        )
+
+
+# --- volume / anomaly checks -------------------------------------------------
+
+DEFAULT_MIN_VOLUME_RATIO = 0.5
+DEFAULT_MAX_VOLUME_RATIO = 2.0
+DEFAULT_MAX_QUARANTINE_RATIO = 0.01
+
+
+@dataclass
+class VolumeCheck:
+    """Outcome of comparing this run's row count to its history.
+
+    ``status`` is one of ``ok``, ``anomaly`` or ``no_baseline``. The check
+    never raises on its own: an unusually small hour may be legitimate (a
+    holiday, an upstream outage that is somebody else's incident), so the
+    caller decides whether an anomaly is a warning or a failure.
+    """
+
+    status: str
+    current: int
+    baseline: float | None
+    ratio: float | None
+    reason: str | None = None
+
+    def as_fields(self) -> dict:
+        return {
+            "volume_status": self.status,
+            "volume_current": self.current,
+            "volume_baseline": self.baseline,
+            "volume_ratio": self.ratio,
+            "volume_reason": self.reason,
+        }
+
+
+def check_volume(
+    current: int,
+    baselines: list[int],
+    *,
+    min_ratio: float = DEFAULT_MIN_VOLUME_RATIO,
+    max_ratio: float = DEFAULT_MAX_VOLUME_RATIO,
+) -> VolumeCheck:
+    """Compare ``current`` rows to the median of ``baselines``.
+
+    Baselines are the same slice on previous days (same page_type and hour),
+    so the comparison is like-for-like across the daily cycle. The median,
+    not the mean, so one bad day in the history (an earlier outage that
+    landed zero rows) does not drag the expectation down and mask a repeat.
+
+    Zero rows is always an anomaly: a source that returned nothing needs a
+    human even when there is no history to compare against.
+    """
+    if current == 0:
+        return VolumeCheck(
+            status="anomaly", current=0, baseline=None, ratio=None,
+            reason="zero rows landed",
+        )
+    if not baselines:
+        return VolumeCheck(
+            status="no_baseline", current=current, baseline=None, ratio=None,
+        )
+
+    baseline = float(statistics.median(baselines))
+    if baseline == 0:
+        return VolumeCheck(
+            status="no_baseline", current=current, baseline=0.0, ratio=None,
+            reason="baseline median is zero",
+        )
+
+    ratio = current / baseline
+    if ratio < min_ratio:
+        reason = (
+            f"{current} rows is {ratio:.0%} of the baseline {baseline:.0f}, "
+            f"below the {min_ratio:.0%} floor"
+        )
+        return VolumeCheck("anomaly", current, baseline, ratio, reason)
+    if ratio > max_ratio:
+        reason = (
+            f"{current} rows is {ratio:.0%} of the baseline {baseline:.0f}, "
+            f"above the {max_ratio:.0%} ceiling"
+        )
+        return VolumeCheck("anomaly", current, baseline, ratio, reason)
+    return VolumeCheck("ok", current, baseline, ratio)
+
+
+def check_quarantine_ratio(
+    rows_read: int,
+    rows_quarantined: int,
+    *,
+    max_ratio: float = DEFAULT_MAX_QUARANTINE_RATIO,
+) -> None:
+    """Raise if too large a share of the batch failed the contract.
+
+    A handful of malformed rows is the normal cost of doing business and the
+    quarantine path exists to absorb them. A *large* share means the source
+    changed shape (a renamed column, a new format) and the rest of the batch
+    should not be trusted either — fail loudly rather than land 1% of an
+    hour and call it done.
+    """
+    if rows_read == 0:
+        return
+    ratio = rows_quarantined / rows_read
+    if ratio > max_ratio:
+        raise ValueError(
+            f"quarantine ratio {ratio:.2%} ({rows_quarantined} of "
+            f"{rows_read} rows) exceeds the {max_ratio:.2%} threshold — "
+            "the source has probably changed shape; not landing this batch"
         )

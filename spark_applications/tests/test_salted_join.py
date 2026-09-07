@@ -70,3 +70,30 @@ def test_salted_join_end_to_end(spark):
 
     # All 50 rows from large_df should match
     assert result.count() == 50
+
+
+def test_salted_join_helper_matches_plain_join(spark):
+    """``salted_join`` is a drop-in for a plain equi-join: same rows, no
+    salt columns leaking into the output, no duplicated key column."""
+    from spark_applications.salted_join import salted_join
+
+    large = spark.createDataFrame(
+        [(1, "x")] * 30 + [(2, "y"), (3, "z"), (4, "no-match")],
+        ["id", "value"],
+    )
+    small = spark.createDataFrame(
+        [(1, "a"), (2, "b"), (3, "c")], ["id", "name"]
+    )
+
+    inner = salted_join(large, small, "id")
+    assert inner.columns == ["id", "value", "name"]
+    assert inner.count() == 32
+    assert inner.filter("id = 4").count() == 0
+
+    plain = large.join(small, on="id", how="inner")
+    assert sorted(inner.collect()) == sorted(plain.collect())
+
+    left = salted_join(large, small, "id", how="left")
+    assert left.count() == 33
+    unmatched = left.filter("id = 4").collect()
+    assert len(unmatched) == 1 and unmatched[0].name is None

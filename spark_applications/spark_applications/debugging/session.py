@@ -11,7 +11,15 @@ bounds you give it. Knowing what the plan looks like without it is how you
 recognise the cases where it did not save you.
 """
 
+import os
+
 from pyspark.sql import SparkSession
+
+# Must be set before the JVM starts: local[*] otherwise advertises the
+# machine's hostname for the block manager, and on laptops whose hostname
+# does not resolve to a reachable interface, shuffle fetches and task-result
+# fetches fail (Connection refused / TaskResultLost).
+os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
 
 # Kept small so the cases run on a laptop in seconds. A real diagnosis would
 # use the cluster's real partition count; the plan *shape* is the same.

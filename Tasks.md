@@ -114,16 +114,16 @@ schema evolution, ETL performance, idempotency, and reliability. Each item
 should ship with a short written narrative of the issue and its resolution
 (a `DECISIONS.md` / incident-style writeup) rather than just code.
 
-### #1 — Schema evolution (partially done, see spark_applications/DECISIONS.md)
+### #1 — Schema evolution (done, see spark_applications/DECISIONS.md and debezium_deployment/SCHEMA_EVOLUTION.md)
 - [x] Replace `inferSchema=True` with explicit `StructType` schemas for all CSV reads (`utils/schema.py`, done under #2)
 - [x] Add a quarantine / dead-letter path for records that do not conform to the contract (`utils/quality.py`, `write_quarantine`)
 - [x] dbt: use safe casts (`macros/safe_casts.sql`) so one malformed row doesn't fail the model; warn-level not_null on `event_date`
-- [ ] Introduce a Schema Registry (Avro/Protobuf) for the Debezium → Kafka path with an explicit compatibility mode (needs infra)
-- [ ] Wire Debezium → Schema Registry → Flink and demonstrate surviving a source `ALTER TABLE` (add/rename/drop column) gracefully (needs infra)
+- [x] Introduce a Schema Registry (Avro/Protobuf) for the Debezium → Kafka path with an explicit compatibility mode — Confluent Schema Registry + Avro converter in `debezium_deployment/` (Connect built from a derived image; upstream ships no Confluent converter), `BACKWARD` set per subject at register; `deploy.sh schemas|compat|evolve|evolve-incompatible`
+- [x] Wire Debezium → Schema Registry → Flink and demonstrate surviving a source `ALTER TABLE` — `cdc_sql.source_ddl(fmt="avro-confluent")`; `./deploy.sh evolve` run live 2026-09-04: ADD/RENAME/DROP took the subject from v1 to v4 with the connector RUNNING, `evolve-incompatible` got the 409 (`debezium_deployment/SCHEMA_EVOLUTION.md`). Flink job behaviour across versions follows from Avro resolution; not re-run end to end
 - [x] Adopt Delta/Iceberg with column mapping + a deliberate schema-evolution policy for evolving tables — done in `iceberg_deployment/` (field-ID based evolution, documented safe/unsafe operation policy, 22 tests asserting old data still reads correctly after rename/drop/re-add)
-- [ ] dbt: add model contracts + `dbt source freshness` (needs a `loaded_at` column added to `raw.impressions`)
+- [x] dbt: model contracts on all six models + `dbt source freshness` on `raw.impressions.loaded_at` (warn 2h / error 24h); `migrations/001_add_loaded_at.sql` + `deploy.sh migrate`; verified against PostgreSQL: run 6/6, test 20 pass + 1 expected warn, freshness pass
 
-### #2 — ETL performance & correctness (HIGHEST PRIORITY — mostly done, see spark_applications/DECISIONS.md)
+### #2 — ETL performance & correctness (done locally; cluster re-measurement outstanding — see spark_applications/DECISIONS.md)
 - [x] `api_pull.py`: stop decompressing in the driver; let Spark read gzip CSV directly (distributed)
 - [x] Use explicit schema instead of `inferSchema` (double scan + non-deterministic types) — `utils/schema.py`
 - [x] Replace full-table `mode("overwrite")` with idempotent partition replacement (`partitionOverwriteMode=dynamic`) so reprocessing one hour does not nuke history
@@ -133,28 +133,39 @@ should ship with a short written narrative of the issue and its resolution
 - [x] Enable AQE / adaptive skew-join at the session level (`utils/session.py`)
 - [x] Worked debugging cases with before/after query plans and measured evidence — `spark_applications/debugging/` + `DEBUGGING.md` (see DECISIONS.md #7). Covers skew/join-strategy, driver OOM, partition pruning, small files, `AMBIGUOUS_REFERENCE`, `PythonException`, and Python UDF → pandas UDF. 56 tests.
 - [x] Reusable plan-analysis helpers (`debugging/explain_tools.py`): captures the post-AQE *final* plan that `explain()` does not show; parses join strategies, exchange counts + partitioning schemes, `PartitionFilters`/`PushedFilters`, Python-eval operators, runtime scan metrics
-- [ ] Wire salting (`salted_join.py`) into the real hot-key path in `aggregation.py`; tune broadcast thresholds (case 01 establishes broadcast-first as the conclusion to apply)
-- [ ] Re-measure debugging cases 01 and 07 on a real cluster — `local[*]` understates per-row and network costs, and keeps partitions under AQE's 256MB skew threshold
-- [ ] Write up before/after shuffle + runtime metrics for the production jobs (needs a real cluster run)
+- [x] Wire salting into the real hot-key path in `aggregation.py` (`--user-dimension`, `--join-strategy broadcast|salted`; broadcast-hinted by default, `salted_join()` helper) and tune thresholds in `utils/session.py` (broadcast 10MB → 64MB, AQE skew threshold 256MB → 64MB); plan shapes measured in `debugging/production_metrics.py`, written up in DEBUGGING.md
+- [x] Re-measure debugging cases 01 and 07 on a real cluster — done 2026-09-06 on the stack's EMR 7.13 cluster with `debugging/cluster_measure.py` (REST-API task metrics); case 01: 210x shuffle-read skew, 10MB threshold did not broadcast on EMR, AQE coalesced but did not split; case 07: native 8x the Python UDF, pandas UDF 1.6x. DEBUGGING.md "Cluster re-measurement"
+- [x] Before/after metrics for the production jobs — plan-level locally (`production_metrics.py`) and runtime on EMR at 20M rows: plain join 59.7s with a 677x straggler and 189MB spill, broadcast 20.5s even, salted 15.0s even (DEBUGGING.md)
 
-### #3 — Idempotency, reliability, data quality (partially done, see spark_applications/DECISIONS.md)
+### #3 — Idempotency, reliability, data quality (done, see spark_applications/DECISIONS.md)
 - [x] Retry + backoff on the API pull (`fetch_impression_data`)
 - [x] Deduplication for at-least-once CDC delivery (`quality.deduplicate`)
 - [x] Row-count reconciliation read → written + quarantined (`quality.reconcile_counts`, wired into `api_pull`)
-- [ ] Transactionally couple raw-file write and table write so partial failure cannot orphan data
-- [ ] Volume/anomaly checks; freshness SLAs
+- [x] Transactionally couple raw-file write and table write — `utils/landing.py` (stage → write table → promote → publish `_manifest.json` last; abort deletes the staged file); storage adapters gained exists/move/delete/manifest primitives for local, S3, DBFS; end-to-end tests through `api_pull.main`
+- [x] Volume/anomaly checks; freshness SLAs — `quality.check_volume` (median of same hour on previous days, from manifests; warn by default, `VOLUME_CHECK_MODE=fail`), `check_quarantine_ratio` (>1% aborts); freshness enforced by Airflow `impression_quality_checks.check_freshness` and dbt `source freshness`
 
-### #4 — Orchestration maturity (Airflow) (mostly done, see spark_applications/DECISIONS.md)
+### #4 — Orchestration maturity (Airflow) (done, see spark_applications/DECISIONS.md and airflow_deployment/RUNBOOK.md)
 - [x] Real backfillable DAG (`dags/impression_pipeline.py`): hourly schedule, catchup, idempotent date/hour params, retries+backoff, SLA, failure callback
 - [x] Dynamic task mapping over page_types
-- [ ] Datasets / data-aware scheduling; document a reprocessing runbook
+- [x] Datasets / data-aware scheduling (`dags/datasets.py`, outlets on the pipeline, dataset-triggered `impression_quality_checks` with freshness + volume tasks, 14 tests); `airflow_deployment/RUNBOOK.md` for reprocessing
 
 ### #5 — Streaming / CDC (connect the deployed pieces) (done, see spark_applications/DECISIONS.md)
 - [x] Flink job that consumes the Debezium topics (`flink_applications/cdc_impressions.py`)
 - [x] Checkpointing (exactly-once), event-time watermarks, CDC delete handling, windowed aggregation
-- [ ] Schema registry on the Debezium → Flink path; upsert-kafka / Delta sink instead of print sink
+- [x] Schema registry on the Debezium → Flink path (see #1) and an `upsert-kafka` sink keyed by (page_type, window) instead of the print sink; Flink image now ships the Kafka + Avro-registry jars
 
-### #6 — Observability, lineage, FinOps (partially done, see spark_applications/DECISIONS.md)
+### #6 — Observability, lineage, FinOps (done, see spark_applications/DECISIONS.md #6/#8, lineage_deployment/LINEAGE.md, aws_deployment/FINOPS.md)
 - [x] Replace `print()` with structured logging; emit metrics (rows in/out, bytes) — `utils/observability.py`
-- [ ] OpenLineage across Spark → S3 → Glue → Athena → dbt
-- [ ] Cost story: parquet compression, S3 lifecycle, EMR right-sizing, Athena scanned-bytes, Glue DPU-hours
+- [x] OpenLineage across Spark → S3 → Glue → Athena → dbt — Spark listener in `utils/session.py`, Airflow provider, Glue/EMR template parameter, `dbt-ol`, Marquez in `lineage_deployment/`; Athena documented as manual emission (`lineage_deployment/LINEAGE.md`). All gated on `OPENLINEAGE_URL`
+- [x] Cost story — `aws_deployment/FINOPS.md` + template changes: zstd parquet everywhere, S3 lifecycle tiers/expiry, Athena workgroup with bytes-scanned cutoff, Glue 5.0 auto-scaling with timeout, EMR Spot task group + managed scaling + idle termination, cost-allocation tags; cfn-lint clean. Nothing measured against a real bill yet
+
+### Discovered 2026-09-04 (not yet done)
+- [x] Run the cluster protocol (cases 01, 07, production before/after) — done, see above
+- [x] Deploy the CloudFormation stack and verify what cfn-lint cannot — deployed 2026-09-06 (`data-processing-pipeline`, account 194611079924, us-east-1). `AWS::NoValue` in EMR properties and Glue arguments drops keys cleanly; Glue 5.0 honours the folded `--conf` (zstd output); Athena cutoff enforced. Seven pre-existing defects found and fixed on the way (DECISIONS.md #8). Full S3 → Lambda → Step Function → Batch → Crawler → Glue run: `ExecutionSucceeded`. The OpenLineage jar on Glue remains untested (lineage was off for the deployment)
+- [ ] Run the Flink CDC job end to end against the evolved topic (versions 1-4) and record the NULL-resolution behaviour `SCHEMA_EVOLUTION.md` derives from Avro rules
+- [ ] `impression_quality_checks` reads the local layout only; add boto3 readers for DynamoDB status + S3 manifests so it works in `SPARK_MODE=aws`
+- [ ] Emit Athena lineage from the Step Function / Lambda (`LINEAGE.md` has the `openlineage-python` pattern) — currently the only manual hop
+- [ ] `flink_applications/tests/test_hello_world.py` asserts on captured stdout, but the Table API `print()` writes from the JVM and pytest's capsys does not see it; make the test assert on a collected result instead
+- [ ] The Glue crawler catalogues the whole landing bucket as one table named after the bucket with `partition_0`/`partition_1` for the `raw/impressions` prefix; point it at `s3://<landing>/raw/impressions/` (and the ETL output at `processed/`) so the table is named and partitioned meaningfully
+- [ ] EMR: the stack's `spark.jars.packages` OpenLineage line duplicates the `datazone-openlineage-spark` jar EMR 7.13 already ships on the classpath (see `lineage_deployment/LINEAGE.md`); drop the Maven line on EMR or pin to the shipped version, then test lineage on Glue/EMR with `OPENLINEAGE_URL` set
+- [ ] Deployed stack left running after verification: the EMR cluster self-terminates after 1h idle (`AutoTerminationPolicy`); everything else idles at ~$0. `aws cloudformation delete-stack --stack-name data-processing-pipeline` (empty the landing/processed buckets first) removes it

@@ -1,5 +1,7 @@
 """AWS Batch job to validate file encoding is UTF-8."""
 
+import gzip
+import io
 import os
 import sys
 
@@ -24,13 +26,25 @@ def check_encoding(bucket: str, key: str) -> dict:
     response = s3_client.get_object(Bucket=bucket, Key=key)
     body = response["Body"].read(SAMPLE_SIZE)
 
-    result = chardet.detect(body)
-    encoding = result.get("encoding", "unknown")
-    confidence = result.get("confidence", 0.0)
+    # The web server serves gzip CSV and api_pull lands it as-is. Detecting
+    # the encoding of the *compressed* bytes is meaningless (chardet returns
+    # None and the check fails every real file), so inspect the decompressed
+    # text. Decompress only a sample: the file may be large and a 1MB sample
+    # of text is plenty for detection. A truncated gzip stream raises
+    # EOFError/OSError at the end of the sample; the bytes before that are
+    # still what we want.
+    if key.endswith(".gz"):
+        decompressor = gzip.GzipFile(fileobj=io.BytesIO(body))
+        try:
+            body = decompressor.read(SAMPLE_SIZE)
+        except (EOFError, OSError):
+            body = decompressor.read()
 
-    is_valid = encoding and encoding.lower() in (
-        "utf-8", "ascii", "utf-8-sig"
-    )
+    result = chardet.detect(body)
+    encoding = result.get("encoding") or "unknown"
+    confidence = result.get("confidence") or 0.0
+
+    is_valid = encoding.lower() in ("utf-8", "ascii", "utf-8-sig")
 
     return {
         "encoding": encoding,

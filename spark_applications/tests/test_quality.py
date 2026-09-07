@@ -101,3 +101,70 @@ def test_reconcile_counts_zero_expected():
     reconcile_counts(0, 0, label="empty")
     with pytest.raises(ValueError):
         reconcile_counts(0, 5, label="empty")
+
+
+# --- volume / anomaly checks (#3 follow-up) ---------------------------------
+
+from spark_applications.utils.quality import (  # noqa: E402
+    VolumeCheck,
+    check_quarantine_ratio,
+    check_volume,
+)
+
+
+def test_check_volume_ok_within_band():
+    result = check_volume(current=1_000, baselines=[900, 1_100, 1_000])
+    assert isinstance(result, VolumeCheck)
+    assert result.status == "ok"
+    assert result.baseline == 1_000       # median of the baselines
+    assert result.ratio == 1.0
+    assert result.reason is None
+
+
+def test_check_volume_flags_a_collapse_and_a_spike():
+    low = check_volume(current=100, baselines=[1_000, 1_000, 1_000])
+    assert low.status == "anomaly"
+    assert low.ratio == 0.1
+    assert "below" in low.reason
+
+    high = check_volume(current=5_000, baselines=[1_000])
+    assert high.status == "anomaly"
+    assert high.ratio == 5.0
+    assert "above" in high.reason
+
+
+def test_check_volume_band_is_configurable():
+    result = check_volume(
+        current=400, baselines=[1_000], min_ratio=0.3, max_ratio=3.0
+    )
+    assert result.status == "ok"
+
+
+def test_check_volume_without_baselines_cannot_judge():
+    result = check_volume(current=1_000, baselines=[])
+    assert result.status == "no_baseline"
+    assert result.baseline is None
+    assert result.ratio is None
+
+
+def test_check_volume_zero_rows_is_always_an_anomaly():
+    # An empty pull is never "within the band" — a source that returned
+    # nothing needs a human even if yesterday was also small.
+    result = check_volume(current=0, baselines=[3])
+    assert result.status == "anomaly"
+    assert check_volume(current=0, baselines=[]).status == "anomaly"
+
+
+def test_check_volume_median_ignores_one_bad_baseline_day():
+    # A single outlier day (an earlier outage) must not drag the baseline.
+    result = check_volume(current=1_000, baselines=[0, 1_000, 1_050, 980])
+    assert result.status == "ok"
+
+
+def test_check_quarantine_ratio():
+    assert check_quarantine_ratio(rows_read=1_000, rows_quarantined=5) is None
+    with pytest.raises(ValueError, match="quarantine ratio"):
+        check_quarantine_ratio(rows_read=1_000, rows_quarantined=50)
+    # Threshold is configurable; zero rows read is not a division error.
+    assert check_quarantine_ratio(0, 0) is None
+    check_quarantine_ratio(rows_read=100, rows_quarantined=20, max_ratio=0.25)

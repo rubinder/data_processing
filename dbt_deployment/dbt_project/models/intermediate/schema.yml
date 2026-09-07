@@ -1,0 +1,39 @@
+version: 2
+
+models:
+  - name: int_impressions_aggregated
+    description: >
+      One row per (user, impression, page_type, date, hour) with event counts
+      and funnel depth. Mirrors spark_applications/aggregation.py.
+    config:
+      contract:
+        enforced: true
+    columns:
+      - name: user_id
+        data_type: varchar
+        tests:
+          - not_null
+      - name: impression_id
+        data_type: varchar
+        tests:
+          - not_null
+      - name: page_type
+        data_type: integer
+      - name: event_date
+        data_type: date
+      - name: hour
+        data_type: integer
+      - name: event_count
+        data_type: bigint
+      - name: distinct_events
+        data_type: bigint
+      - name: first_event_second
+        data_type: integer
+      - name: last_event_second
+        data_type: integer
+      - name: first_event_at
+        data_type: timestamp
+      - name: last_event_at
+        data_type: timestamp
+      - name: max_event_reached
+        data_type: varchar

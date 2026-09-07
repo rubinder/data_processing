@@ -7,7 +7,15 @@ dependencies = [
     "apache-airflow==2.11.1",
     "apache-airflow-providers-apache-spark>=4.11.0",
     "apache-airflow-providers-amazon>=9.5.0",
+    # OpenLineage emission from every task (parent-run facet for Spark jobs).
+    # 2.20.x requires Airflow >= 2.11.
+    "apache-airflow-providers-openlineage>=2.20.1",
     "pyspark==3.5.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
 ]
 
 [build-system]

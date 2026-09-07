@@ -1,21 +1,45 @@
-"""PySpark job that pulls data from an API and saves it to storage."""
+"""PySpark job that pulls data from an API and saves it to storage.
+
+Landing is transactional (``utils/landing.py``): the raw gzip is staged, the
+table is written from the staged bytes, and only then is the raw file
+promoted to its partition path and a ``_manifest.json`` published with the
+row counts and checksum. A failure anywhere in between deletes the staged
+file, so no run can leave a raw file that the table does not account for.
+
+Before the table write the batch is checked against its own history
+(``quality.check_volume``: same page_type and hour on previous days, read
+from those days' manifests) and against the contract
+(``quality.check_quarantine_ratio``). A contract breach aborts the landing;
+a volume anomaly is logged as a warning by default and aborts only when
+``VOLUME_CHECK_MODE=fail``.
+"""
 
 import argparse
 import os
 import sys
 import time
+from datetime import date as date_type
+from datetime import timedelta
 from typing import Callable
 
 import requests
 from dotenv import load_dotenv
 
-from spark_applications.utils.mode import Mode, add_mode_argument, parse_mode
+from spark_applications.utils.landing import (
+    landed_raw_file,
+    manifest_path_for,
+    raw_path_for,
+)
+from spark_applications.utils.mode import add_mode_argument, parse_mode
 from spark_applications.utils.observability import (
     get_logger,
     log_event,
     log_metrics,
 )
 from spark_applications.utils.quality import (
+    DEFAULT_MAX_QUARANTINE_RATIO,
+    check_quarantine_ratio,
+    check_volume,
     reconcile_counts,
     split_on_contract,
 )
@@ -25,9 +49,20 @@ from spark_applications.utils.schema import (
     schema_with_corrupt_column,
 )
 from spark_applications.utils.session import get_spark_session
-from spark_applications.utils.storage import get_storage_adapter
+from spark_applications.utils.storage import (
+    StorageAdapter,
+    get_storage_adapter,
+)
 
 load_dotenv()
+
+# How many previous days of the same (page_type, hour) slice form the volume
+# baseline, and whether an anomaly is a warning or a failure.
+VOLUME_BASELINE_DAYS = int(os.getenv("VOLUME_BASELINE_DAYS", "7"))
+VOLUME_CHECK_MODE = os.getenv("VOLUME_CHECK_MODE", "warn")
+MAX_QUARANTINE_RATIO = float(
+    os.getenv("MAX_QUARANTINE_RATIO", str(DEFAULT_MAX_QUARANTINE_RATIO))
+)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -96,16 +131,38 @@ def fetch_impression_data(
     )
 
 
+def baseline_row_counts(
+    storage: StorageAdapter,
+    page_type: str,
+    date: str,
+    hour: str,
+    days: int = VOLUME_BASELINE_DAYS,
+) -> list[int]:
+    """``rows_written`` from the manifests of the same slice on prior days.
+
+    Days with no manifest (never pulled, or landed before manifests existed)
+    are skipped rather than counted as zero, so a young table simply has a
+    shorter baseline.
+    """
+    anchor = date_type.fromisoformat(date)
+    counts = []
+    for back in range(1, days + 1):
+        previous = (anchor - timedelta(days=back)).isoformat()
+        manifest = storage.read_raw_manifest(
+            manifest_path_for(raw_path_for(page_type, previous, hour))
+        )
+        if manifest and "rows_written" in manifest:
+            counts.append(int(manifest["rows_written"]))
+    return counts
+
+
 def main(argv: list[str] | None = None):
     args = parse_args(argv)
     mode = parse_mode(args)
 
     api_base_url = os.getenv("API_BASE_URL", "http://localhost:8000")
     job_id = f"impression_{args.page_type}_{args.date}_{args.hour}"
-    raw_path = (
-        f"impressions/page_type={args.page_type}"
-        f"/date={args.date}/hour={args.hour}/data.csv.gz"
-    )
+    raw_path = raw_path_for(args.page_type, args.date, args.hour)
     table_path = "impressions"
 
     spark = get_spark_session("ApiPull", mode)
@@ -125,58 +182,100 @@ def main(argv: list[str] | None = None):
             api_base_url, args.page_type, args.date, args.hour,
         )
 
-        # Step 3: Land the raw gzip file in the landing zone
-        storage.save_raw_file(raw_content, raw_path)
-        log_event(
-            log, "raw_landed", job=job_id, path=raw_path,
-            bytes=len(raw_content),
-        )
-
-        # Step 4: Read the gzip CSV directly with Spark.
-        # Spark decompresses and parses .gz in a distributed manner, so we do
-        # not pull/decompress the file on the driver. An explicit schema means
-        # a single read pass (no inferSchema double-scan) and enforces the
-        # column contract; PERMISSIVE mode captures rows that violate it.
-        read_schema = schema_with_corrupt_column(IMPRESSION_SCHEMA)
-        raw_df = storage.read_csv(
-            spark,
-            raw_path,
-            schema=read_schema,
-            corrupt_column=CORRUPT_RECORD_COL,
-        )
-
-        # Step 5: Enforce the contract. Conforming rows proceed; malformed or
-        # schema-drifting rows are quarantined instead of corrupting the table.
-        required = [f.name for f in IMPRESSION_SCHEMA.fields]
-        split = split_on_contract(raw_df, required_cols=required)
-        bad_count = split.quarantined.count()
-        if bad_count:
-            storage.write_quarantine(
-                split.quarantined, f"{table_path}/{job_id}"
+        # Step 3-6 run inside the landing transaction: the raw bytes are
+        # staged, the table is written from the staged copy, and the raw
+        # file is promoted + its manifest published only if everything below
+        # succeeds. Any exception aborts the landing (staged file deleted).
+        with landed_raw_file(
+            storage, raw_content, job_id, raw_path
+        ) as landing:
+            log_event(
+                log, "raw_staged", job=job_id, path=landing.read_path,
+                bytes=landing.raw_bytes, sha256=landing.raw_sha256,
             )
 
-        # Reconcile: every row read must be accounted for as either written or
-        # quarantined — nothing silently dropped.
-        valid_count = split.valid.count()
-        reconcile_counts(
-            split.total,
-            valid_count + bad_count,
-            label=f"{job_id} raw vs written+quarantined",
-        )
-        log_metrics(
-            log, job=job_id,
-            rows_read=split.total,
-            rows_written=valid_count,
-            rows_quarantined=bad_count,
-        )
+            # Step 4: Read the gzip CSV directly with Spark.
+            # Spark decompresses and parses .gz in a distributed manner, so
+            # we do not pull/decompress the file on the driver. An explicit
+            # schema means a single read pass (no inferSchema double-scan)
+            # and enforces the column contract; PERMISSIVE mode captures
+            # rows that violate it.
+            read_schema = schema_with_corrupt_column(IMPRESSION_SCHEMA)
+            raw_df = storage.read_csv(
+                spark,
+                landing.read_path,
+                schema=read_schema,
+                corrupt_column=CORRUPT_RECORD_COL,
+            )
 
-        # Step 6: Write partitioned table. Dynamic partition overwrite makes
-        # re-running this (page_type, date, hour) idempotent without deleting
-        # other partitions.
-        storage.write_partitioned(
-            split.valid,
-            table_path,
-            partition_cols=["page_type", "date", "hour"],
+            # Step 5: Enforce the contract. Conforming rows proceed;
+            # malformed or schema-drifting rows are quarantined instead of
+            # corrupting the table.
+            required = [f.name for f in IMPRESSION_SCHEMA.fields]
+            split = split_on_contract(raw_df, required_cols=required)
+            bad_count = split.quarantined.count()
+            if bad_count:
+                storage.write_quarantine(
+                    split.quarantined, f"{table_path}/{job_id}"
+                )
+
+            # Reconcile: every row read must be accounted for as either
+            # written or quarantined — nothing silently dropped.
+            valid_count = split.valid.count()
+            reconcile_counts(
+                split.total,
+                valid_count + bad_count,
+                label=f"{job_id} raw vs written+quarantined",
+            )
+            landing.record_counts(
+                rows_read=split.total,
+                rows_written=valid_count,
+                rows_quarantined=bad_count,
+            )
+
+            # Contract check: a large quarantine share means the source
+            # changed shape. Raising here aborts the landing.
+            check_quarantine_ratio(
+                split.total, bad_count, max_ratio=MAX_QUARANTINE_RATIO
+            )
+
+            # Volume check against the same slice on previous days.
+            volume = check_volume(
+                valid_count,
+                baseline_row_counts(
+                    storage, args.page_type, args.date, args.hour
+                ),
+            )
+            log_metrics(
+                log, job=job_id,
+                rows_read=split.total,
+                rows_written=valid_count,
+                rows_quarantined=bad_count,
+                **volume.as_fields(),
+            )
+            if volume.status == "anomaly":
+                log_event(
+                    log, "volume_anomaly", job=job_id, reason=volume.reason,
+                    mode=VOLUME_CHECK_MODE,
+                )
+                if VOLUME_CHECK_MODE == "fail":
+                    raise ValueError(
+                        f"{job_id}: volume anomaly — {volume.reason}"
+                    )
+
+            # Step 6: Write partitioned table. Dynamic partition overwrite
+            # makes re-running this (page_type, date, hour) idempotent
+            # without deleting other partitions.
+            storage.write_partitioned(
+                split.valid,
+                table_path,
+                partition_cols=["page_type", "date", "hour"],
+            )
+
+        # Landing committed: raw file at its final path, manifest published.
+        log_event(
+            log, "raw_committed", job=job_id, path=raw_path,
+            manifest=manifest_path_for(raw_path),
         )
 
         # Step 7: Update status to completed

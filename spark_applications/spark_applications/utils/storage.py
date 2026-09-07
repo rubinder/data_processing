@@ -86,6 +86,32 @@ class StorageAdapter(ABC):
     def save_raw_file(self, content: bytes, path: str) -> None:
         """Save raw file bytes to storage."""
 
+    # -- raw-file primitives used by utils/landing.py -----------------------
+    # These are deliberately tiny: the transactional behaviour (stage, write
+    # table, promote, publish manifest, abort on failure) lives in one place,
+    # ``landing.landed_raw_file``, and each adapter only has to know how to
+    # test/move/delete an object and read/write a small JSON document.
+
+    @abstractmethod
+    def raw_file_exists(self, path: str) -> bool:
+        """Return True if a raw object exists at ``path``."""
+
+    @abstractmethod
+    def move_raw_file(self, src: str, dst: str) -> None:
+        """Move a raw object, replacing anything already at ``dst``."""
+
+    @abstractmethod
+    def delete_raw_file(self, path: str) -> None:
+        """Delete a raw object; a missing object is not an error."""
+
+    @abstractmethod
+    def write_raw_manifest(self, manifest: dict, path: str) -> None:
+        """Write a small JSON document into the raw area."""
+
+    @abstractmethod
+    def read_raw_manifest(self, path: str) -> dict | None:
+        """Read a JSON document from the raw area; None when absent."""
+
     @abstractmethod
     def read_csv(
         self,
@@ -161,11 +187,60 @@ class LocalStorageAdapter(StorageAdapter):
         with open(status_file, "w") as f:
             json.dump(record, f)
 
+    def _raw(self, path: str) -> str:
+        return os.path.join(self.base_dir, "raw", path)
+
     def save_raw_file(self, content: bytes, path: str) -> None:
-        full_path = os.path.join(self.base_dir, "raw", path)
+        full_path = self._raw(path)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         with open(full_path, "wb") as f:
             f.write(content)
+
+    def raw_file_exists(self, path: str) -> bool:
+        return os.path.isfile(self._raw(path))
+
+    def move_raw_file(self, src: str, dst: str) -> None:
+        dst_full = self._raw(dst)
+        os.makedirs(os.path.dirname(dst_full), exist_ok=True)
+        # os.replace is atomic on the same filesystem: readers see either the
+        # old raw file or the new one, never a partial write.
+        os.replace(self._raw(src), dst_full)
+        self._prune_empty_parent(self._raw(src))
+
+    def delete_raw_file(self, path: str) -> None:
+        full_path = self._raw(path)
+        try:
+            os.remove(full_path)
+        except FileNotFoundError:
+            return
+        self._prune_empty_parent(full_path)
+
+    def _prune_empty_parent(self, full_path: str) -> None:
+        """Drop the immediate parent directory if we emptied it.
+
+        Keeps ``raw/<table>/_staging/`` from accumulating one empty directory
+        per job id.
+        """
+        parent = os.path.dirname(full_path)
+        try:
+            os.rmdir(parent)
+        except OSError:
+            pass
+
+    def write_raw_manifest(self, manifest: dict, path: str) -> None:
+        full_path = self._raw(path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        tmp_path = f"{full_path}.tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(manifest, f, sort_keys=True, indent=2)
+        os.replace(tmp_path, full_path)
+
+    def read_raw_manifest(self, path: str) -> dict | None:
+        try:
+            with open(self._raw(path)) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
 
     def read_csv(
         self,
@@ -175,7 +250,7 @@ class LocalStorageAdapter(StorageAdapter):
         header: bool = True,
         corrupt_column: str | None = None,
     ) -> DataFrame:
-        full_path = os.path.join(self.base_dir, "raw", path)
+        full_path = self._raw(path)
         return _read_csv_at(spark, full_path, schema, header, corrupt_column)
 
     def write_quarantine(self, df: DataFrame, path: str) -> None:
@@ -232,15 +307,66 @@ class AwsStorageAdapter(StorageAdapter):
             }
         )
 
-    def save_raw_file(self, content: bytes, path: str) -> None:
+    def _s3(self):
         import boto3
 
-        s3 = boto3.client("s3")
-        s3.put_object(
+        return boto3.client("s3")
+
+    def save_raw_file(self, content: bytes, path: str) -> None:
+        self._s3().put_object(
             Bucket=self.bucket,
             Key=f"raw/{path}",
             Body=content,
         )
+
+    def raw_file_exists(self, path: str) -> bool:
+        from botocore.exceptions import ClientError
+
+        try:
+            self._s3().head_object(Bucket=self.bucket, Key=f"raw/{path}")
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
+        return True
+
+    def move_raw_file(self, src: str, dst: str) -> None:
+        # S3 has no rename; copy then delete. A PUT of a single object is
+        # atomic, so readers of ``dst`` see the old or the new object, never
+        # a partial one. Objects over 5GB need multipart copy; raw hourly
+        # files here are far smaller.
+        s3 = self._s3()
+        s3.copy_object(
+            Bucket=self.bucket,
+            Key=f"raw/{dst}",
+            CopySource={"Bucket": self.bucket, "Key": f"raw/{src}"},
+        )
+        s3.delete_object(Bucket=self.bucket, Key=f"raw/{src}")
+
+    def delete_raw_file(self, path: str) -> None:
+        # delete_object on a missing key is a successful no-op in S3.
+        self._s3().delete_object(Bucket=self.bucket, Key=f"raw/{path}")
+
+    def write_raw_manifest(self, manifest: dict, path: str) -> None:
+        self._s3().put_object(
+            Bucket=self.bucket,
+            Key=f"raw/{path}",
+            Body=json.dumps(manifest, sort_keys=True, indent=2).encode(),
+            ContentType="application/json",
+        )
+
+    def read_raw_manifest(self, path: str) -> dict | None:
+        from botocore.exceptions import ClientError
+
+        try:
+            obj = self._s3().get_object(Bucket=self.bucket, Key=f"raw/{path}")
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code in ("404", "NoSuchKey", "NotFound"):
+                return None
+            raise
+        return json.loads(obj["Body"].read())
 
     def read_csv(
         self,
@@ -308,11 +434,43 @@ class DatabricksStorageAdapter(StorageAdapter):
             .saveAsTable(status_table)
         )
 
+    # DBFS is mounted as a local filesystem at /dbfs, so the raw-file
+    # primitives are the local ones against that root.
+    def _raw(self, path: str) -> str:
+        return f"/dbfs/raw/{path}"
+
     def save_raw_file(self, content: bytes, path: str) -> None:
-        dbfs_path = f"/dbfs/raw/{path}"
+        dbfs_path = self._raw(path)
         os.makedirs(os.path.dirname(dbfs_path), exist_ok=True)
         with open(dbfs_path, "wb") as f:
             f.write(content)
+
+    def raw_file_exists(self, path: str) -> bool:
+        return os.path.isfile(self._raw(path))
+
+    def move_raw_file(self, src: str, dst: str) -> None:
+        dst_full = self._raw(dst)
+        os.makedirs(os.path.dirname(dst_full), exist_ok=True)
+        os.replace(self._raw(src), dst_full)
+
+    def delete_raw_file(self, path: str) -> None:
+        try:
+            os.remove(self._raw(path))
+        except FileNotFoundError:
+            pass
+
+    def write_raw_manifest(self, manifest: dict, path: str) -> None:
+        full_path = self._raw(path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, "w") as f:
+            json.dump(manifest, f, sort_keys=True, indent=2)
+
+    def read_raw_manifest(self, path: str) -> dict | None:
+        try:
+            with open(self._raw(path)) as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return None
 
     def read_csv(
         self,
@@ -378,8 +536,13 @@ class DatabricksStorageAdapter(StorageAdapter):
 def get_storage_adapter(mode: Mode, **kwargs) -> StorageAdapter:
     """Factory function to get the appropriate storage adapter."""
     if mode == Mode.LOCAL:
+        # PIPELINE_DATA_DIR lets the Airflow container and the Spark jobs
+        # share one data root (status files, raw manifests) — see
+        # airflow_deployment/dags/impression_quality_checks.py.
         return LocalStorageAdapter(
-            base_dir=kwargs.get("base_dir", "data")
+            base_dir=kwargs.get(
+                "base_dir", os.getenv("PIPELINE_DATA_DIR", "data")
+            )
         )
     elif mode == Mode.AWS:
         return AwsStorageAdapter(

@@ -62,7 +62,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="print the full plan text rather than the summary",
     )
+    parser.add_argument(
+        "--rows",
+        type=int,
+        default=None,
+        help=(
+            "row count for the generated fixtures (cases 1, 2, 4-7). The "
+            "laptop defaults keep partitions under AQE's 256MB skew "
+            "threshold; on a cluster use 1e8+ so the runtime effects are "
+            "measurable. See debugging/CLUSTER_RUN.md."
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def diagnose_with_rows(module, spark, rows: int | None):
+    """Call ``module.diagnose`` passing ``rows`` only where it is accepted.
+
+    Case 03 is driven by a table on disk rather than a row count.
+    """
+    import inspect
+
+    if rows is not None and "rows" in inspect.signature(
+        module.diagnose
+    ).parameters:
+        return module.diagnose(spark, rows=rows)
+    return module.diagnose(spark)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -84,7 +109,7 @@ def main(argv: list[str] | None = None) -> None:
     try:
         for number in numbers:
             module = load_case(number)
-            diagnosis = module.diagnose(spark)
+            diagnosis = diagnose_with_rows(module, spark, args.rows)
             print(diagnosis.render())
 
             if args.plans:
