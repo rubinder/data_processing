@@ -107,6 +107,33 @@ unattended: Lambda -> Step Function -> Batch encoding check (Fargate) ->
 Glue crawler -> Glue ETL, `ExecutionSucceeded`, with the processed zstd
 parquet and the quarantine rows in the processed bucket.
 
+**Follow-up 2026-09-07 — two stacks, a real catalog, a queryable table.**
+
+- **EMR moved to its own stack** (`cloudformation/emr.yaml`,
+  `scripts/emr.sh up|status|down`). The first cluster self-terminated after
+  its 3600s idle window exactly as configured, which proved the policy and
+  also left a terminated cluster inside a live stack, i.e. drift on every
+  later update. EMR is the only component that bills by the hour whether or
+  not it works, so it is now created for a job and deleted after; the core
+  stack stays up at near-zero idle cost. `deploy.py` filters the parameter
+  set down to what each template declares so one `.env` drives both.
+  CloudFormation's early validation (`AWS::EarlyValidation::
+  ResourceExistenceCheck`) refused the new stack while the core stack still
+  owned the same-named IAM roles; the order is core update first, then
+  `emr.sh up`.
+- **Crawler targets are the table prefixes**, `raw/impressions/` and
+  `processed/`, not the bucket root. The root target had produced one table
+  named after the bucket with `partition_0`/`partition_1`. The catalog now
+  holds `impressions` (raw gzip CSV) and `processed` (zstd parquet), both
+  partitioned by `page_type/date/hour`; the Step Function crawls before the
+  ETL (raw) and again after it (processed).
+- **Athena proof.** Through the `data-processing-dev` workgroup,
+  `SELECT page_type, date, hour, count(*) FROM "data-processing_db".processed
+  GROUP BY 1,2,3` returns `1 | 2026-09-06 | 10 | 68367`, matching the Glue
+  job's `rows_written`. Bytes scanned: 0, because a count over partition
+  columns is answered from parquet footers, which is the FinOps point in one
+  row.
+
 What the deployment confirmed (all previously marked unverified): `AWS::NoValue`
 inside EMR `ConfigurationProperties` and inside Glue `DefaultArguments` drops
 the key cleanly (the live cluster and job show no OpenLineage keys); Glue 5.0

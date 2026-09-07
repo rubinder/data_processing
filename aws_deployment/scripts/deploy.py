@@ -24,6 +24,12 @@ def stack_exists(stack_name: str) -> bool:
         raise
 
 
+def declared_parameters(template_url: str) -> set[str]:
+    """Parameter keys the template at ``template_url`` declares."""
+    response = cf_client.validate_template(TemplateURL=template_url)
+    return {p["ParameterKey"] for p in response.get("Parameters", [])}
+
+
 def deploy_stack(
     stack_name: str,
     template_url: str,
@@ -35,7 +41,12 @@ def deploy_stack(
         stack_name: Name of the CloudFormation stack.
         template_url: S3 URL of the template.
         parameters: List of parameter dicts with ParameterKey/ParameterValue.
+            Keys the template does not declare are dropped, so one parameter
+            set can drive both the core stack (main.yaml) and the EMR stack
+            (emr.yaml); CloudFormation rejects unknown parameters.
     """
+    declared = declared_parameters(template_url)
+    parameters = [p for p in parameters if p["ParameterKey"] in declared]
     common_args = {
         "StackName": stack_name,
         "TemplateURL": template_url,

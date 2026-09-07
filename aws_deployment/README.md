@@ -152,3 +152,36 @@ that uses the cluster is in `../spark_applications/spark_applications/debugging/
 `scripts/deploy.sh` sources `../.env`; placeholder `AWS_ACCESS_KEY_ID` /
 `AWS_SECRET_ACCESS_KEY` values copied from `.env.example` are ignored so they
 cannot shadow the CLI profile.
+
+
+## Two stacks: core and EMR
+
+Since 2026-09-07 the deployment is two CloudFormation stacks:
+
+| stack | template | script | why |
+| --- | --- | --- | --- |
+| `data-processing-pipeline` | `cloudformation/main.yaml` | `scripts/deploy.sh` | buckets, Lambda, Step Function, Batch, Glue, Athena, DynamoDB: idle cost is ~zero, so it stays up |
+| `data-processing-emr` | `cloudformation/emr.yaml` | `scripts/emr.sh up|status|down` | the cluster bills by the instance-hour whether or not it works; create it for a job, delete it after |
+
+`emr.sh up` uploads the template and the Python 3.11 bootstrap, creates or
+updates the stack and prints the cluster id; `emr.sh down` deletes it. The
+cluster keeps its one-hour idle auto-termination as a safety net (it fired
+on the first deployment, exactly as configured), but a terminated cluster
+inside a live stack is drift, so deleting the stack is the intended
+lifecycle. `scripts/deploy.py` sends each template only the parameters it
+declares, which is what lets both scripts share one `.env`.
+
+## Catalog
+
+The crawler has two targets: `raw/impressions/` in the landing bucket (the
+gzip CSV as landed, table `impressions`) and `processed/` in the processed
+bucket (the ETL's zstd parquet, table `processed`), both partitioned by
+`page_type/date/hour`. The Step Function runs the crawler before the ETL so
+the raw table reflects the new file, and again after so the processed table
+does; the Athena workgroup `data-processing-<env>` then answers:
+
+```sql
+SELECT page_type, date, hour, count(*) AS rows
+FROM "data-processing_db".processed
+GROUP BY 1, 2, 3;
+```
