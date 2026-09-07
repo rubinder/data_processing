@@ -1,0 +1,343 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Data processing pipeline - EMR cluster (separate stack). The core stack
+  (main.yaml) holds the always-on, near-zero-idle-cost resources: buckets,
+  Lambda, Step Function, Batch, Glue, Athena, DynamoDB. EMR is the one
+  component that bills by the hour whether or not it does anything, so it
+  lives here and is created for a job and deleted after (scripts/emr.sh).
+  Its AutoTerminationPolicy is the safety net, not the plan.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: data-processing
+    Description: Project name used as prefix for resource names
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment; used in names and cost-allocation tags
+  CostCenter:
+    Type: String
+    Default: data-platform
+    Description: Cost-allocation tag value applied to every taggable resource
+  DeploymentBucket:
+    Type: String
+    Description: S3 bucket containing deployment artifacts (Lambda zip, Glue scripts, jars)
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnet IDs for Batch compute environment and EMR cluster
+  OpenLineageUrl:
+    Type: String
+    Default: ""
+    Description: >-
+      OpenLineage HTTP endpoint (e.g. Marquez: http://host:5000). Empty
+      disables lineage emission on both Glue and EMR.
+  OpenLineageSparkVersion:
+    Type: String
+    Default: 1.53.0
+    Description: >-
+      io.openlineage:openlineage-spark_2.12 version. Glue loads the jar from
+      s3://<DeploymentBucket>/deployment/jars/openlineage-spark_2.12-<version>.jar
+      (deploy.sh uploads it); EMR resolves it via spark.jars.packages.
+
+  EmrKeyPair:
+    Type: String
+    Default: ""
+    Description: EC2 key pair name for EMR instances (optional)
+  EmrReleaseLabel:
+    Type: String
+    Default: emr-7.13.0
+    Description: >-
+      EMR release. emr-7.13.0 ships Spark 3.5.6; any emr-7.x release is on
+      the Spark 3.5 line.
+  EmrInstanceType:
+    Type: String
+    Default: m5.xlarge
+    Description: Instance type for master, core and task nodes
+  EmrCoreInstanceCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: On-demand core nodes (HDFS + compute). This is also the managed-scaling on-demand ceiling.
+  EmrTaskInstanceCount:
+    Type: Number
+    Default: 1
+    MinValue: 0
+    Description: Initial Spot task nodes (compute only, no HDFS; safe to lose)
+  EmrManagedScalingMinUnits:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    Description: Managed scaling floor, in instances (core + task)
+  EmrManagedScalingMaxUnits:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    Description: Managed scaling ceiling, in instances (core + task)
+  EmrIdleTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    MinValue: 60
+    MaxValue: 604800
+    Description: Auto-terminate the cluster after this many idle seconds
+  EmrBootstrapScriptKey:
+    Type: String
+    Default: ""
+    Description: >-
+      S3 key (in DeploymentBucket) of an EMR bootstrap script, e.g.
+      deployment/bootstrap_python311.sh, which installs Python 3.11 so the
+      Python 3.10-baseline spark_applications jobs run on EMR 7.x (Python 3.9
+      default). Empty disables the bootstrap and the interpreter override.
+
+Conditions:
+  HasOpenLineage: !Not [!Equals [!Ref OpenLineageUrl, ""]]
+  HasEmrKeyPair: !Not [!Equals [!Ref EmrKeyPair, ""]]
+  HasEmrBootstrap: !Not [!Equals [!Ref EmrBootstrapScriptKey, ""]]
+
+Resources:
+  EMRServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-emr-service-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: elasticmapreduce.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEMRServicePolicy_v2
+      # AmazonEMRServicePolicy_v2 only permits EC2 provisioning on VPCs,
+      # subnets and security groups tagged
+      # for-use-with-amazon-emr-managed-policies=true. This template does
+      # not own the VPC/subnets it is given, so a first deployment failed
+      # with "Service role ... has insufficient EC2 permissions ...
+      # ec2:CreateSecurityGroup". The inline policy grants the provisioning
+      # actions the legacy AmazonElasticMapReduceRole carried, without the
+      # tag precondition; scope it down (or tag the network and drop it)
+      # once the network is owned by infrastructure code.
+      Policies:
+        - PolicyName: EmrEc2Provisioning
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:CancelSpotInstanceRequests
+                  - ec2:CreateFleet
+                  - ec2:CreateLaunchTemplate
+                  - ec2:CreateLaunchTemplateVersion
+                  - ec2:CreateNetworkInterface
+                  - ec2:CreateSecurityGroup
+                  - ec2:CreateTags
+                  - ec2:DeleteLaunchTemplate
+                  - ec2:DeleteNetworkInterface
+                  - ec2:DeleteSecurityGroup
+                  - ec2:DeleteTags
+                  - ec2:Describe*
+                  - ec2:DetachNetworkInterface
+                  - ec2:ModifyImageAttribute
+                  - ec2:ModifyInstanceAttribute
+                  - ec2:RequestSpotInstances
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RunInstances
+                  - ec2:TerminateInstances
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:DescribeAlarms
+                  - iam:GetRole
+                  - iam:GetRolePolicy
+                  - iam:ListInstanceProfiles
+                  - iam:ListRolePolicies
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt EMRInstanceRole.Arn
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ec2.amazonaws.com
+              - Effect: Allow
+                Action: iam:CreateServiceLinkedRole
+                Resource: "*"
+                Condition:
+                  StringLike:
+                    iam:AWSServiceName:
+                      - spot.amazonaws.com
+                      - elasticmapreduce.amazonaws.com.cn
+                      - elasticmapreduce.amazonaws.com
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: !Ref CostCenter
+  EMRInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-emr-instance-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonElasticMapReduceforEC2Role
+      Policies:
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}/*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: !Ref CostCenter
+  EMRInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-emr-instance-profile"
+      Roles:
+        - !Ref EMRInstanceRole
+  EMRCluster:
+    Type: AWS::EMR::Cluster
+    Properties:
+      Name: !Sub "${ProjectName}-emr-cluster"
+      ReleaseLabel: !Ref EmrReleaseLabel
+      Applications:
+        - Name: Spark
+      ServiceRole: !Ref EMRServiceRole
+      JobFlowRole: !Ref EMRInstanceProfile
+      LogUri: !Sub "s3://${DeploymentBucket}/emr-logs/"
+      VisibleToAllUsers: true
+      # Lets two independent spark-submit steps share the cluster instead
+      # of queueing; only meaningful with ActionOnFailure CONTINUE.
+      StepConcurrencyLevel: 2
+      # A long-lived cluster with nothing to do is the single biggest EMR
+      # cost leak. Terminate after the idle window; a scheduled job would
+      # recreate the cluster (or move to EMR Serverless).
+      AutoTerminationPolicy:
+        IdleTimeout: !Ref EmrIdleTimeoutSeconds
+      # Managed scaling adds/removes nodes on YARN memory pressure.
+      # MaximumOnDemandCapacityUnits == core count means every unit above
+      # the core floor is Spot; MaximumCoreCapacityUnits == core count means
+      # scaling only ever adds task nodes (no HDFS rebalancing on scale-in).
+      ManagedScalingPolicy:
+        ComputeLimits:
+          UnitType: Instances
+          MinimumCapacityUnits: !Ref EmrManagedScalingMinUnits
+          MaximumCapacityUnits: !Ref EmrManagedScalingMaxUnits
+          MaximumCoreCapacityUnits: !Ref EmrCoreInstanceCount
+          MaximumOnDemandCapacityUnits: !Ref EmrCoreInstanceCount
+      Instances:
+        # Must be true for AutoTerminationPolicy to be the thing that ends
+        # the cluster rather than "no steps" ending it at launch.
+        KeepJobFlowAliveWhenNoSteps: true
+        TerminationProtected: false
+        # Master and core hold the driver / HDFS / shuffle data: an
+        # interruption there fails the job, so they stay on demand.
+        MasterInstanceGroup:
+          Name: master
+          InstanceCount: 1
+          InstanceType: !Ref EmrInstanceType
+          Market: ON_DEMAND
+        CoreInstanceGroup:
+          Name: core
+          InstanceCount: !Ref EmrCoreInstanceCount
+          InstanceType: !Ref EmrInstanceType
+          Market: ON_DEMAND
+        # Task nodes are stateless compute; losing one costs a task retry,
+        # not the job. No BidPrice = capped at the on-demand price.
+        TaskInstanceGroups:
+          - Name: task-spot
+            InstanceCount: !Ref EmrTaskInstanceCount
+            InstanceType: !Ref EmrInstanceType
+            Market: SPOT
+        Ec2SubnetId: !Select [0, !Ref SubnetIds]
+        Ec2KeyName: !If [HasEmrKeyPair, !Ref EmrKeyPair, !Ref AWS::NoValue]
+      BootstrapActions: !If
+        - HasEmrBootstrap
+        - - Name: python311
+            ScriptBootstrapAction:
+              Path: !Sub "s3://${DeploymentBucket}/${EmrBootstrapScriptKey}"
+        - !Ref AWS::NoValue
+      Configurations:
+        # Mirrors spark_applications/utils/session.py _COMMON_CONF so a job
+        # behaves the same locally, on EMR and on Glue.
+        - Classification: spark-defaults
+          ConfigurationProperties:
+            spark.sql.shuffle.partitions: "200"
+            spark.sql.adaptive.enabled: "true"
+            spark.sql.adaptive.coalescePartitions.enabled: "true"
+            spark.sql.adaptive.skewJoin.enabled: "true"
+            spark.sql.parquet.compression.codec: zstd
+            spark.sql.sources.partitionOverwriteMode: dynamic
+            spark.sql.sources.partitionColumnTypeInference.enabled: "false"
+            # Interpreter installed by the bootstrap action (see
+            # emr/bootstrap_python311.sh); EMR 7.x defaults to 3.9.
+            spark.pyspark.python: !If
+              - HasEmrBootstrap
+              - /usr/bin/python3.11
+              - !Ref AWS::NoValue
+            spark.pyspark.driver.python: !If
+              - HasEmrBootstrap
+              - /usr/bin/python3.11
+              - !Ref AWS::NoValue
+            # OpenLineage: resolved from Maven Central at spark-submit time,
+            # so cluster nodes need outbound internet (NAT) for this to
+            # work. Use a bootstrap action + spark.jars if they do not.
+            spark.jars.packages: !If
+              - HasOpenLineage
+              - !Sub "io.openlineage:openlineage-spark_2.12:${OpenLineageSparkVersion}"
+              - !Ref AWS::NoValue
+            spark.extraListeners: !If
+              - HasOpenLineage
+              - io.openlineage.spark.agent.OpenLineageSparkListener
+              - !Ref AWS::NoValue
+            spark.openlineage.transport.type: !If
+              - HasOpenLineage
+              - http
+              - !Ref AWS::NoValue
+            spark.openlineage.transport.url: !If
+              - HasOpenLineage
+              - !Ref OpenLineageUrl
+              - !Ref AWS::NoValue
+            spark.openlineage.namespace: !If
+              - HasOpenLineage
+              - !Ref ProjectName
+              - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: !Ref CostCenter
+
+Outputs:
+  EMRClusterId:
+    Value: !Ref EMRCluster
+    Description: EMR cluster ID
+  EMRServiceRoleArn:
+    Description: EMR service role
+    Value: !GetAtt EMRServiceRole.Arn

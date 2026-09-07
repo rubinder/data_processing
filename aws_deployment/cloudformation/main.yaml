@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
   Data processing pipeline - S3 landing, Lambda, Step Function, Batch, Glue,
-  Athena workgroup, EMR, DynamoDB. Cost-aware defaults: see ../FINOPS.md.
+  Athena workgroup, DynamoDB. EMR is a separate stack (emr.yaml).
+  Cost-aware defaults: see ../FINOPS.md.
 
 # ------------------------------------------------------------------
 # Cost / observability notes for this template (long form in FINOPS.md)
@@ -14,59 +15,50 @@ Description: >-
 #   publishes ProcessedBytes to CloudWatch.
 # * The Glue job runs Glue 5.0 (Spark 3.5) with auto scaling, zstd parquet
 #   and dynamic partition overwrite, mirroring spark_applications.
-# * The EMR cluster keeps master/core on demand, puts task nodes on Spot,
-#   scales with a managed policy and self-terminates when idle.
-# * OpenLineage is wired into both Glue and EMR behind one parameter.
+# * OpenLineage is wired into Glue (and the EMR stack) behind one parameter.
 # ------------------------------------------------------------------
 
 Parameters:
+
+  # ---- Glue ----------------------------------------------------------
+
+  # ---- Athena --------------------------------------------------------
+
+  # ---- OpenLineage ---------------------------------------------------
+
   ProjectName:
     Type: String
     Default: data-processing
     Description: Project name used as prefix for resource names
-
   Environment:
     Type: String
     Default: dev
     AllowedValues: [dev, staging, prod]
     Description: Deployment environment; used in names and cost-allocation tags
-
   CostCenter:
     Type: String
     Default: data-platform
     Description: Cost-allocation tag value applied to every taggable resource
-
   DeploymentBucket:
     Type: String
     Description: S3 bucket containing deployment artifacts (Lambda zip, Glue scripts, jars)
-
   LambdaS3Key:
     Type: String
     Default: deployment/lambda.zip
     Description: S3 key for Lambda deployment package
-
   GlueScriptS3Key:
     Type: String
     Default: deployment/etl_job.py
     Description: S3 key for Glue ETL script
-
   BatchJobImage:
     Type: String
     Description: ECR image URI for the Batch encoding check job
-
   VpcId:
     Type: AWS::EC2::VPC::Id
     Description: VPC ID for the Batch compute environment security group
-
   SubnetIds:
     Type: List<AWS::EC2::Subnet::Id>
     Description: Subnet IDs for Batch compute environment and EMR cluster
-
-  EmrKeyPair:
-    Type: String
-    Default: ""
-    Description: EC2 key pair name for EMR instances (optional)
-
   BucketVersioning:
     Type: String
     Default: Suspended
@@ -76,8 +68,6 @@ Parameters:
       overwrite rewrites partition files, so with versioning on every
       re-run leaves noncurrent copies behind; the lifecycle rules expire
       those after 14 days to bound the cost.
-
-  # ---- Glue ----------------------------------------------------------
   GlueVersion:
     Type: String
     Default: "5.0"
@@ -85,7 +75,6 @@ Parameters:
     Description: >-
       Glue runtime. 5.0 = Spark 3.5.4 / Python 3.11 (matches the project's
       Spark 3.5 baseline); 5.1 = Spark 3.5.6; 4.0 = Spark 3.3 (legacy).
-
   GlueNumberOfWorkers:
     Type: Number
     Default: 2
@@ -94,13 +83,11 @@ Parameters:
     Description: >-
       Upper bound on G.1X workers. With --enable-auto-scaling this is the
       ceiling, not the fixed allocation; Glue bills per worker actually used.
-
   GlueJobTimeoutMinutes:
     Type: Number
     Default: 60
     MinValue: 1
     Description: Job run timeout in minutes (a stuck run is a DPU-hour leak)
-
   GlueMaxConcurrentRuns:
     Type: Number
     Default: 1
@@ -110,8 +97,6 @@ Parameters:
       writing the same (page_type, date, hour) partition with dynamic
       overwrite would race; the state machine retries on
       ConcurrentRunsExceededException instead.
-
-  # ---- Athena --------------------------------------------------------
   AthenaBytesScannedCutoffBytes:
     Type: Number
     Default: 10737418240
@@ -119,67 +104,12 @@ Parameters:
     Description: >-
       Per-query scanned-bytes cutoff enforced by the workgroup, in bytes.
       Default 10 GiB. Athena's own floor is 10 MiB (10485760).
-
-  # ---- EMR -----------------------------------------------------------
-  EmrReleaseLabel:
-    Type: String
-    Default: emr-7.13.0
-    Description: >-
-      EMR release. emr-7.13.0 ships Spark 3.5.6; any emr-7.x release is on
-      the Spark 3.5 line.
-
-  EmrInstanceType:
-    Type: String
-    Default: m5.xlarge
-    Description: Instance type for master, core and task nodes
-
-  EmrCoreInstanceCount:
-    Type: Number
-    Default: 2
-    MinValue: 1
-    Description: On-demand core nodes (HDFS + compute). This is also the managed-scaling on-demand ceiling.
-
-  EmrTaskInstanceCount:
-    Type: Number
-    Default: 1
-    MinValue: 0
-    Description: Initial Spot task nodes (compute only, no HDFS; safe to lose)
-
-  EmrManagedScalingMinUnits:
-    Type: Number
-    Default: 2
-    MinValue: 1
-    Description: Managed scaling floor, in instances (core + task)
-
-  EmrManagedScalingMaxUnits:
-    Type: Number
-    Default: 10
-    MinValue: 1
-    Description: Managed scaling ceiling, in instances (core + task)
-
-  EmrIdleTimeoutSeconds:
-    Type: Number
-    Default: 3600
-    MinValue: 60
-    MaxValue: 604800
-    Description: Auto-terminate the cluster after this many idle seconds
-
-  # ---- OpenLineage ---------------------------------------------------
   OpenLineageUrl:
     Type: String
     Default: ""
     Description: >-
       OpenLineage HTTP endpoint (e.g. Marquez: http://host:5000). Empty
       disables lineage emission on both Glue and EMR.
-
-  EmrBootstrapScriptKey:
-    Type: String
-    Default: ""
-    Description: >-
-      S3 key (in DeploymentBucket) of an EMR bootstrap script, e.g.
-      deployment/bootstrap_python311.sh, which installs Python 3.11 so the
-      Python 3.10-baseline spark_applications jobs run on EMR 7.x (Python 3.9
-      default). Empty disables the bootstrap and the interpreter override.
   OpenLineageSparkVersion:
     Type: String
     Default: 1.53.0
@@ -190,12 +120,40 @@ Parameters:
 
 Conditions:
   HasOpenLineage: !Not [!Equals [!Ref OpenLineageUrl, ""]]
-  HasEmrKeyPair: !Not [!Equals [!Ref EmrKeyPair, ""]]
-  HasEmrBootstrap: !Not [!Equals [!Ref EmrBootstrapScriptKey, ""]]
-
 Resources:
   # ============================================================
   # S3 Buckets
+  # ============================================================
+
+  # ============================================================
+  # IAM Roles
+  # ============================================================
+
+  # ============================================================
+  # Lambda
+  # ============================================================
+
+  # ============================================================
+  # Step Function
+  # ============================================================
+
+  # ============================================================
+  # Glue
+  # ============================================================
+
+  # ============================================================
+  # Athena
+  # ============================================================
+
+  # ============================================================
+  # Batch (Fargate)
+  # ============================================================
+
+  # ============================================================
+  # ============================================================
+
+  # ============================================================
+  # DynamoDB
   # ============================================================
 
   DataLandingBucket:
@@ -254,7 +212,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   ProcessedDataBucket:
     Type: AWS::S3::Bucket
     Properties:
@@ -314,11 +271,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
-  # ============================================================
-  # IAM Roles
-  # ============================================================
-
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -358,7 +310,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   StepFunctionExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -409,7 +360,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   GlueCrawlerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -435,6 +385,8 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
                   - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}/*"
       Tags:
         - Key: Project
           Value: !Ref ProjectName
@@ -442,7 +394,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   GlueETLJobRole:
     Type: AWS::IAM::Role
     Properties:
@@ -512,7 +463,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   BatchJobRole:
     Type: AWS::IAM::Role
     Properties:
@@ -545,137 +495,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
-  EMRServiceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-emr-service-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: elasticmapreduce.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonEMRServicePolicy_v2
-      # AmazonEMRServicePolicy_v2 only permits EC2 provisioning on VPCs,
-      # subnets and security groups tagged
-      # for-use-with-amazon-emr-managed-policies=true. This template does
-      # not own the VPC/subnets it is given, so a first deployment failed
-      # with "Service role ... has insufficient EC2 permissions ...
-      # ec2:CreateSecurityGroup". The inline policy grants the provisioning
-      # actions the legacy AmazonElasticMapReduceRole carried, without the
-      # tag precondition; scope it down (or tag the network and drop it)
-      # once the network is owned by infrastructure code.
-      Policies:
-        - PolicyName: EmrEc2Provisioning
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ec2:AuthorizeSecurityGroupEgress
-                  - ec2:AuthorizeSecurityGroupIngress
-                  - ec2:CancelSpotInstanceRequests
-                  - ec2:CreateFleet
-                  - ec2:CreateLaunchTemplate
-                  - ec2:CreateLaunchTemplateVersion
-                  - ec2:CreateNetworkInterface
-                  - ec2:CreateSecurityGroup
-                  - ec2:CreateTags
-                  - ec2:DeleteLaunchTemplate
-                  - ec2:DeleteNetworkInterface
-                  - ec2:DeleteSecurityGroup
-                  - ec2:DeleteTags
-                  - ec2:Describe*
-                  - ec2:DetachNetworkInterface
-                  - ec2:ModifyImageAttribute
-                  - ec2:ModifyInstanceAttribute
-                  - ec2:RequestSpotInstances
-                  - ec2:RevokeSecurityGroupEgress
-                  - ec2:RevokeSecurityGroupIngress
-                  - ec2:RunInstances
-                  - ec2:TerminateInstances
-                  - cloudwatch:PutMetricAlarm
-                  - cloudwatch:DeleteAlarms
-                  - cloudwatch:DescribeAlarms
-                  - iam:GetRole
-                  - iam:GetRolePolicy
-                  - iam:ListInstanceProfiles
-                  - iam:ListRolePolicies
-                Resource: "*"
-              - Effect: Allow
-                Action: iam:PassRole
-                Resource: !GetAtt EMRInstanceRole.Arn
-                Condition:
-                  StringEquals:
-                    iam:PassedToService: ec2.amazonaws.com
-              - Effect: Allow
-                Action: iam:CreateServiceLinkedRole
-                Resource: "*"
-                Condition:
-                  StringLike:
-                    iam:AWSServiceName:
-                      - spot.amazonaws.com
-                      - elasticmapreduce.amazonaws.com.cn
-                      - elasticmapreduce.amazonaws.com
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: CostCenter
-          Value: !Ref CostCenter
-
-  EMRInstanceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-emr-instance-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonElasticMapReduceforEC2Role
-      Policies:
-        - PolicyName: S3Access
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                Resource:
-                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
-                  - !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}/*"
-                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}"
-                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}/*"
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: CostCenter
-          Value: !Ref CostCenter
-
-  EMRInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: !Sub "${ProjectName}-emr-instance-profile"
-      Roles:
-        - !Ref EMRInstanceRole
-
-  # ============================================================
-  # Lambda
-  # ============================================================
-
   TriggerStepFunctionLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -698,7 +517,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -707,11 +525,6 @@ Resources:
       Principal: s3.amazonaws.com
       SourceAccount: !Ref AWS::AccountId
       SourceArn: !Sub "arn:aws:s3:::${ProjectName}-landing-${AWS::AccountId}"
-
-  # ============================================================
-  # Step Function
-  # ============================================================
-
   DataProcessingStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -726,7 +539,7 @@ Resources:
           Value: !Ref CostCenter
       DefinitionString: !Sub |
         {
-          "Comment": "Data processing pipeline: encoding check -> crawler -> ETL. The crawler is addressed by its fixed name, not !Ref, so the crawler can depend on the landing bucket without closing the bucket->notification->lambda->state-machine cycle.",
+          "Comment": "Data processing pipeline: encoding check -> crawler (raw table) -> ETL -> crawler (processed table). The crawler is addressed by its fixed name, not !Ref, so the crawler can depend on the landing bucket without closing the bucket->notification->lambda->state-machine cycle.",
           "StartAt": "CheckEncoding",
           "States": {
             "CheckEncoding": {
@@ -804,15 +617,56 @@ Resources:
                   "JitterStrategy": "FULL"
                 }
               ],
-              "End": true
+              "ResultPath": "$.etlResult",
+              "Next": "RecrawlProcessed"
+            },
+            "RecrawlProcessed": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+              "Parameters": {
+                "Name": "${ProjectName}-crawler"
+              },
+              "ResultPath": "$.recrawlResult",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Glue.CrawlerRunningException"],
+                  "IntervalSeconds": 30,
+                  "MaxAttempts": 10,
+                  "BackoffRate": 1.5
+                }
+              ],
+              "Next": "WaitForRecrawl"
+            },
+            "WaitForRecrawl": {
+              "Type": "Wait",
+              "Seconds": 30,
+              "Next": "CheckRecrawlStatus"
+            },
+            "CheckRecrawlStatus": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::aws-sdk:glue:getCrawler",
+              "Parameters": {
+                "Name": "${ProjectName}-crawler"
+              },
+              "ResultPath": "$.recrawlStatus",
+              "Next": "IsRecrawlDone"
+            },
+            "IsRecrawlDone": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.recrawlStatus.Crawler.State",
+                  "StringEquals": "READY",
+                  "Next": "Done"
+                }
+              ],
+              "Default": "WaitForRecrawl"
+            },
+            "Done": {
+              "Type": "Succeed"
             }
           }
         }
-
-  # ============================================================
-  # Glue
-  # ============================================================
-
   GlueDatabase:
     Type: AWS::Glue::Database
     Properties:
@@ -820,7 +674,6 @@ Resources:
       DatabaseInput:
         Name: !Sub "${ProjectName}_db"
         Description: Data processing pipeline database
-
   DataCrawler:
     Type: AWS::Glue::Crawler
     Properties:
@@ -834,12 +687,18 @@ Resources:
           # time and fails with 404 if the bucket does not exist yet. The
           # IAM policies and the S3 notification keep the reconstructed name
           # because referencing the bucket there would be circular.
-          - Path: !Sub "s3://${DataLandingBucket}/"
+          #
+          # Targets are the table prefixes, not bucket roots: crawling the
+          # bucket root produced one table named after the bucket with
+          # partition_0/partition_1 for the raw/impressions folders. With the
+          # prefix as target the table is `impressions` / `processed` and
+          # page_type/date/hour are recognised as Hive-style partitions.
+          - Path: !Sub "s3://${DataLandingBucket}/raw/impressions/"
+          - Path: !Sub "s3://${ProcessedDataBucket}/processed/"
       Tags:
         Project: !Ref ProjectName
         Environment: !Ref Environment
         CostCenter: !Ref CostCenter
-
   GlueETLJob:
     Type: AWS::Glue::Job
     Properties:
@@ -921,11 +780,6 @@ Resources:
         Project: !Ref ProjectName
         Environment: !Ref Environment
         CostCenter: !Ref CostCenter
-
-  # ============================================================
-  # Athena
-  # ============================================================
-
   AthenaWorkGroup:
     Type: AWS::Athena::WorkGroup
     Properties:
@@ -959,11 +813,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
-  # ============================================================
-  # Batch (Fargate)
-  # ============================================================
-
   BatchSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -980,7 +829,6 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
-
   BatchComputeEnvironment:
     Type: AWS::Batch::ComputeEnvironment
     Properties:
@@ -997,7 +845,6 @@ Resources:
         Project: !Ref ProjectName
         Environment: !Ref Environment
         CostCenter: !Ref CostCenter
-
   BatchJobQueue:
     Type: AWS::Batch::JobQueue
     Properties:
@@ -1011,7 +858,6 @@ Resources:
         Project: !Ref ProjectName
         Environment: !Ref Environment
         CostCenter: !Ref CostCenter
-
   EncodingCheckJobDefinition:
     Type: AWS::Batch::JobDefinition
     Properties:
@@ -1039,130 +885,6 @@ Resources:
         Project: !Ref ProjectName
         Environment: !Ref Environment
         CostCenter: !Ref CostCenter
-
-  # ============================================================
-  # EMR Cluster
-  # ============================================================
-
-  EMRCluster:
-    Type: AWS::EMR::Cluster
-    Properties:
-      Name: !Sub "${ProjectName}-emr-cluster"
-      ReleaseLabel: !Ref EmrReleaseLabel
-      Applications:
-        - Name: Spark
-      ServiceRole: !Ref EMRServiceRole
-      JobFlowRole: !Ref EMRInstanceProfile
-      LogUri: !Sub "s3://${DeploymentBucket}/emr-logs/"
-      VisibleToAllUsers: true
-      # Lets two independent spark-submit steps share the cluster instead
-      # of queueing; only meaningful with ActionOnFailure CONTINUE.
-      StepConcurrencyLevel: 2
-      # A long-lived cluster with nothing to do is the single biggest EMR
-      # cost leak. Terminate after the idle window; a scheduled job would
-      # recreate the cluster (or move to EMR Serverless).
-      AutoTerminationPolicy:
-        IdleTimeout: !Ref EmrIdleTimeoutSeconds
-      # Managed scaling adds/removes nodes on YARN memory pressure.
-      # MaximumOnDemandCapacityUnits == core count means every unit above
-      # the core floor is Spot; MaximumCoreCapacityUnits == core count means
-      # scaling only ever adds task nodes (no HDFS rebalancing on scale-in).
-      ManagedScalingPolicy:
-        ComputeLimits:
-          UnitType: Instances
-          MinimumCapacityUnits: !Ref EmrManagedScalingMinUnits
-          MaximumCapacityUnits: !Ref EmrManagedScalingMaxUnits
-          MaximumCoreCapacityUnits: !Ref EmrCoreInstanceCount
-          MaximumOnDemandCapacityUnits: !Ref EmrCoreInstanceCount
-      Instances:
-        # Must be true for AutoTerminationPolicy to be the thing that ends
-        # the cluster rather than "no steps" ending it at launch.
-        KeepJobFlowAliveWhenNoSteps: true
-        TerminationProtected: false
-        # Master and core hold the driver / HDFS / shuffle data: an
-        # interruption there fails the job, so they stay on demand.
-        MasterInstanceGroup:
-          Name: master
-          InstanceCount: 1
-          InstanceType: !Ref EmrInstanceType
-          Market: ON_DEMAND
-        CoreInstanceGroup:
-          Name: core
-          InstanceCount: !Ref EmrCoreInstanceCount
-          InstanceType: !Ref EmrInstanceType
-          Market: ON_DEMAND
-        # Task nodes are stateless compute; losing one costs a task retry,
-        # not the job. No BidPrice = capped at the on-demand price.
-        TaskInstanceGroups:
-          - Name: task-spot
-            InstanceCount: !Ref EmrTaskInstanceCount
-            InstanceType: !Ref EmrInstanceType
-            Market: SPOT
-        Ec2SubnetId: !Select [0, !Ref SubnetIds]
-        Ec2KeyName: !If [HasEmrKeyPair, !Ref EmrKeyPair, !Ref AWS::NoValue]
-      BootstrapActions: !If
-        - HasEmrBootstrap
-        - - Name: python311
-            ScriptBootstrapAction:
-              Path: !Sub "s3://${DeploymentBucket}/${EmrBootstrapScriptKey}"
-        - !Ref AWS::NoValue
-      Configurations:
-        # Mirrors spark_applications/utils/session.py _COMMON_CONF so a job
-        # behaves the same locally, on EMR and on Glue.
-        - Classification: spark-defaults
-          ConfigurationProperties:
-            spark.sql.shuffle.partitions: "200"
-            spark.sql.adaptive.enabled: "true"
-            spark.sql.adaptive.coalescePartitions.enabled: "true"
-            spark.sql.adaptive.skewJoin.enabled: "true"
-            spark.sql.parquet.compression.codec: zstd
-            spark.sql.sources.partitionOverwriteMode: dynamic
-            spark.sql.sources.partitionColumnTypeInference.enabled: "false"
-            # Interpreter installed by the bootstrap action (see
-            # emr/bootstrap_python311.sh); EMR 7.x defaults to 3.9.
-            spark.pyspark.python: !If
-              - HasEmrBootstrap
-              - /usr/bin/python3.11
-              - !Ref AWS::NoValue
-            spark.pyspark.driver.python: !If
-              - HasEmrBootstrap
-              - /usr/bin/python3.11
-              - !Ref AWS::NoValue
-            # OpenLineage: resolved from Maven Central at spark-submit time,
-            # so cluster nodes need outbound internet (NAT) for this to
-            # work. Use a bootstrap action + spark.jars if they do not.
-            spark.jars.packages: !If
-              - HasOpenLineage
-              - !Sub "io.openlineage:openlineage-spark_2.12:${OpenLineageSparkVersion}"
-              - !Ref AWS::NoValue
-            spark.extraListeners: !If
-              - HasOpenLineage
-              - io.openlineage.spark.agent.OpenLineageSparkListener
-              - !Ref AWS::NoValue
-            spark.openlineage.transport.type: !If
-              - HasOpenLineage
-              - http
-              - !Ref AWS::NoValue
-            spark.openlineage.transport.url: !If
-              - HasOpenLineage
-              - !Ref OpenLineageUrl
-              - !Ref AWS::NoValue
-            spark.openlineage.namespace: !If
-              - HasOpenLineage
-              - !Ref ProjectName
-              - !Ref AWS::NoValue
-      Tags:
-        - Key: Project
-          Value: !Ref ProjectName
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: CostCenter
-          Value: !Ref CostCenter
-
-  # ============================================================
-  # DynamoDB
-  # ============================================================
-
   StatusTrackingTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -1183,38 +905,28 @@ Resources:
           Value: !Ref CostCenter
 
 Outputs:
+
   DataLandingBucketName:
     Value: !Ref DataLandingBucket
     Description: S3 bucket for incoming data files (upload under raw/ to get lifecycle tiering)
-
   ProcessedDataBucketName:
     Value: !Ref ProcessedDataBucket
     Description: S3 bucket for processed parquet data
-
   StateMachineArn:
     Value: !Ref DataProcessingStateMachine
     Description: Step Function state machine ARN
-
   GlueDatabaseName:
     Value: !Ref GlueDatabase
     Description: Glue catalog database name
-
   GlueJobName:
     Value: !Ref GlueETLJob
     Description: Glue ETL job name
-
   AthenaWorkGroupName:
     Value: !Ref AthenaWorkGroup
     Description: Athena workgroup to query the processed data through (enforced scanned-bytes cutoff)
-
-  EMRClusterId:
-    Value: !Ref EMRCluster
-    Description: EMR cluster ID
-
   StatusTrackingTableName:
     Value: !Ref StatusTrackingTable
     Description: DynamoDB status tracking table name
-
   OpenLineageEnabled:
     Value: !If [HasOpenLineage, "true", "false"]
     Description: Whether Glue and EMR emit OpenLineage events
