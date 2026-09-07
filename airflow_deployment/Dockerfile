@@ -18,4 +18,5 @@ USER airflow
 RUN pip install --no-cache-dir \
     apache-airflow-providers-apache-spark>=4.11.0 \
     apache-airflow-providers-amazon>=9.5.0 \
+    "apache-airflow-providers-openlineage>=2.20.1" \
     pyspark==3.5.4

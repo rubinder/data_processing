@@ -1,4 +1,13 @@
+# Standalone override: swap the shared data-processing-network (created by
+# airflow_deployment) for debezium-local-network.
+#
+# The network is declared *external* here, exactly like the shared one, and
+# deploy.sh creates it on `up local` if it is missing. Declaring it external
+# (rather than letting Compose create it) is what lets flink_deployment's
+# `local` mode attach to the same network: two Compose projects cannot both
+# own a network of the same name (Compose refuses with a label mismatch), but
+# any number of them can join an external one.
 networks:
   data-processing-network:
-    external: false
+    external: true
     name: debezium-local-network

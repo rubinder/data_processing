@@ -71,3 +71,42 @@ def test_partitioned_write_compacts_to_one_file_per_partition(spark, tmp_path):
     )
     data_files = glob.glob(os.path.join(part_dir, "*.parquet"))
     assert len(data_files) == 1
+
+
+# --- raw-file primitives behind the transactional landing (#3) -------------
+
+def test_move_raw_file_relocates_and_creates_parent(tmp_path):
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    adapter.save_raw_file(b"bytes", "a/_staging/job/data.csv.gz")
+
+    adapter.move_raw_file(
+        "a/_staging/job/data.csv.gz", "a/page_type=1/date=d/hour=1/data.csv.gz"
+    )
+
+    assert not adapter.raw_file_exists("a/_staging/job/data.csv.gz")
+    assert adapter.raw_file_exists("a/page_type=1/date=d/hour=1/data.csv.gz")
+    with open(
+        os.path.join(
+            str(tmp_path), "raw", "a/page_type=1/date=d/hour=1/data.csv.gz"
+        ), "rb"
+    ) as f:
+        assert f.read() == b"bytes"
+
+
+def test_delete_raw_file_is_idempotent(tmp_path):
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    adapter.save_raw_file(b"x", "p/data.csv.gz")
+    adapter.delete_raw_file("p/data.csv.gz")
+    adapter.delete_raw_file("p/data.csv.gz")  # already gone: no error
+    assert not adapter.raw_file_exists("p/data.csv.gz")
+
+
+def test_manifest_round_trip_and_missing(tmp_path):
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    assert adapter.read_raw_manifest("p/_manifest.json") is None
+    adapter.write_raw_manifest(
+        {"job_id": "j", "rows_written": 3}, "p/_manifest.json"
+    )
+    assert adapter.read_raw_manifest("p/_manifest.json") == {
+        "job_id": "j", "rows_written": 3,
+    }

@@ -9,6 +9,37 @@ PySpark data processing jobs that run across local, AWS, and Databricks environm
 - **api_pull.py** - Pulls impression data from the FastAPI web server (see `web_server_code`), updates a status tracking table (DynamoDB/Delta/local depending on mode), saves raw data to storage, reads it back, and writes it as a partitioned table (partitioned by `page_type`, `date`, `hour`).
 - **aggregation.py** - Reads impression data for a given date and hour and aggregates it by `user_id`, `impression_id`, `page_type`.
 
+## Debugging Cases
+
+`debugging/` holds seven runnable investigations of common Spark failures over
+the same impression data. Each reproduces the pathology, shows the query-plan
+evidence that identifies it, applies a fix, and captures the plan again.
+
+| # | Case | What it teaches |
+| - | ---- | --------------- |
+| 1 | Skewed join | `SortMergeJoin` vs `BroadcastHashJoin`; why AQE alone is not a skew strategy |
+| 2 | Driver OOM | Which JVM died, and why this bug is invisible in the plan |
+| 3 | Partition pruning | `PartitionFilters` vs `PushedFilters`; UDFs break pruning, casts do not |
+| 4 | Small-files explosion | `repartition` before `partitionBy`; 432 files → 27 |
+| 5 | `AMBIGUOUS_REFERENCE` | Self-join column collisions; the silent `drop()` variant |
+| 6 | `PythonException` | Reading a 141-line Java trace down to the 2 lines that matter |
+| 7 | Python UDF → pandas UDF | `BatchEvalPython` vs `ArrowEvalPython` |
+
+```bash
+uv run python -m spark_applications.debugging.run --list
+uv run python -m spark_applications.debugging.run --case 3
+uv run python -m spark_applications.debugging.run --case 3 --diff   # plan diff
+uv run python -m spark_applications.debugging.run --all
+```
+
+Written up with resolutions and notes in **[DEBUGGING.md](DEBUGGING.md)**;
+the engineering rationale is entry #7 of [DECISIONS.md](DECISIONS.md).
+
+`debugging/explain_tools.py` is reusable outside the cases — it captures query
+plans as strings (including the post-AQE *final* plan, which `explain()` does
+not show) and parses out join strategies, shuffle counts, partition filters,
+and Python-eval operators.
+
 ## Utilities
 
 The `utils/` package provides shared functionality:
@@ -50,6 +81,9 @@ uv run pytest
 
 # Run a specific test
 uv run pytest tests/test_hello_world.py
+
+# Plan-parser tests only (fast, no SparkSession)
+uv run pytest tests/test_debugging_explain_tools.py
 ```
 
 ## Dependencies
@@ -59,3 +93,6 @@ uv run pytest tests/test_hello_world.py
 - requests (for API calls)
 - python-dotenv (for .env loading)
 - delta-spark (for Databricks Delta tables)
+- pandas + pyarrow (for the pandas/Arrow UDF path in debugging case 7)
+- setuptools (pyspark 3.5's version check imports `distutils`, removed from the
+  stdlib in Python 3.12+)

@@ -135,3 +135,172 @@ def test_local_storage_status(tmp_path):
 
     assert status["job_id"] == "test_job"
     assert status["status"] == "in_progress"
+
+
+# --- transactional landing + volume checks wired into the job (#3) ----------
+
+import json  # noqa: E402
+
+from spark_applications import api_pull  # noqa: E402
+from spark_applications.utils.landing import (  # noqa: E402
+    manifest_path_for,
+    raw_path_for,
+    staging_path_for,
+)
+
+
+def _run_main(spark, mocker, tmp_path, monkeypatch, content: bytes,
+              hour: str = "10"):
+    """Run api_pull.main against tmp_path with the API mocked out."""
+    monkeypatch.setenv("PIPELINE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(api_pull, "get_spark_session", lambda *a, **k: spark)
+    # main() stops the session in its finally; keep the shared fixture alive.
+    mocker.patch.object(spark, "stop")
+    response = mocker.MagicMock()
+    response.content = content
+    response.raise_for_status = mocker.MagicMock()
+    mocker.patch("spark_applications.api_pull.requests.get",
+                 return_value=response)
+    api_pull.main([
+        "--mode", "local", "--page_type", "1",
+        "--date", "2026-01-01", "--hour", hour,
+    ])
+
+
+def _status(tmp_path, job_id):
+    with open(os.path.join(str(tmp_path), "status", f"{job_id}.json")) as f:
+        return json.load(f)["status"]
+
+
+def test_main_lands_raw_table_and_manifest_together(
+    spark, mocker, tmp_path, monkeypatch
+):
+    _run_main(spark, mocker, tmp_path, monkeypatch, _make_gzip_csv())
+
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    job_id = "impression_1_2026-01-01_10"
+    final = raw_path_for("1", "2026-01-01", "10")
+
+    assert adapter.raw_file_exists(final)
+    assert not adapter.raw_file_exists(staging_path_for(job_id))
+    manifest = adapter.read_raw_manifest(manifest_path_for(final))
+    assert manifest["rows_read"] == 10
+    assert manifest["rows_written"] == 10
+    assert manifest["rows_quarantined"] == 0
+    assert adapter.read_partitioned(spark, "impressions").count() == 10
+    assert _status(tmp_path, job_id) == "completed"
+
+
+def test_main_failure_after_staging_leaves_no_orphan(
+    spark, mocker, tmp_path, monkeypatch
+):
+    """If the table write fails the staged raw file is removed, nothing is
+    promoted, no manifest is published, and the status says failed."""
+    mocker.patch.object(
+        LocalStorageAdapter, "write_partitioned",
+        side_effect=RuntimeError("disk full"),
+    )
+
+    with pytest.raises(RuntimeError, match="disk full"):
+        _run_main(spark, mocker, tmp_path, monkeypatch, _make_gzip_csv())
+
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    job_id = "impression_1_2026-01-01_10"
+    final = raw_path_for("1", "2026-01-01", "10")
+    assert not adapter.raw_file_exists(final)
+    assert not adapter.raw_file_exists(staging_path_for(job_id))
+    assert adapter.read_raw_manifest(manifest_path_for(final)) is None
+    assert _status(tmp_path, job_id) == "failed"
+
+
+def test_main_aborts_when_quarantine_ratio_is_breached(
+    spark, mocker, tmp_path, monkeypatch
+):
+    """Half the rows failing the contract means the source changed shape:
+    abort rather than land half an hour."""
+    csv_buffer = io.StringIO()
+    writer = csv.writer(csv_buffer)
+    writer.writerow([
+        "user_id", "impression_id", "page_type",
+        "date", "hour", "min", "second", "event_type",
+    ])
+    for i in range(10):
+        hour = "10" if i % 2 else "NOPE"
+        writer.writerow([f"u{i}", f"i{i}", "1", "2026-01-01", hour, "0",
+                         str(i), "a"])
+    content = gzip.compress(csv_buffer.getvalue().encode("utf-8"))
+
+    with pytest.raises(ValueError, match="quarantine ratio"):
+        _run_main(spark, mocker, tmp_path, monkeypatch, content)
+
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    final = raw_path_for("1", "2026-01-01", "10")
+    assert not adapter.raw_file_exists(final)
+    assert adapter.read_raw_manifest(manifest_path_for(final)) is None
+    # The bad rows were still preserved for inspection.
+    assert os.path.isdir(os.path.join(
+        str(tmp_path), "quarantine", "impressions",
+        "impression_1_2026-01-01_10",
+    ))
+
+
+def test_baseline_row_counts_reads_prior_days_same_slice(tmp_path):
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    for day, rows in [("2025-12-31", 900), ("2025-12-30", 1100),
+                      ("2025-12-24", 5)]:   # 24th is outside a 7-day window
+        adapter.write_raw_manifest(
+            {"rows_written": rows},
+            manifest_path_for(raw_path_for("1", day, "10")),
+        )
+    # A different hour must not count as baseline for hour 10.
+    adapter.write_raw_manifest(
+        {"rows_written": 42},
+        manifest_path_for(raw_path_for("1", "2025-12-31", "11")),
+    )
+
+    counts = api_pull.baseline_row_counts(
+        adapter, "1", "2026-01-01", "10", days=7
+    )
+    assert sorted(counts) == [900, 1100]
+    assert api_pull.baseline_row_counts(adapter, "2", "2026-01-01", "10") == []
+
+
+def test_main_volume_anomaly_is_a_warning_by_default(
+    spark, mocker, tmp_path, monkeypatch
+):
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    # History says this slice normally has 1000 rows; today has 10.
+    adapter.write_raw_manifest(
+        {"rows_written": 1000},
+        manifest_path_for(raw_path_for("1", "2025-12-31", "10")),
+    )
+    events = mocker.spy(api_pull, "log_event")
+
+    _run_main(spark, mocker, tmp_path, monkeypatch, _make_gzip_csv())
+
+    final = raw_path_for("1", "2026-01-01", "10")
+    assert adapter.raw_file_exists(final)          # still landed
+    anomalies = [
+        c for c in events.call_args_list if c.args[1] == "volume_anomaly"
+    ]
+    assert len(anomalies) == 1
+    assert anomalies[0].kwargs["mode"] == "warn"
+    assert "below the 50% floor" in anomalies[0].kwargs["reason"]
+
+
+def test_main_volume_anomaly_fails_the_run_when_configured(
+    spark, mocker, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(api_pull, "VOLUME_CHECK_MODE", "fail")
+    adapter = LocalStorageAdapter(base_dir=str(tmp_path))
+    adapter.write_raw_manifest(
+        {"rows_written": 1000},
+        manifest_path_for(raw_path_for("1", "2025-12-31", "10")),
+    )
+
+    with pytest.raises(ValueError, match="volume anomaly"):
+        _run_main(spark, mocker, tmp_path, monkeypatch, _make_gzip_csv())
+
+    final = raw_path_for("1", "2026-01-01", "10")
+    assert not adapter.raw_file_exists(final)
+    assert _status(tmp_path, "impression_1_2026-01-01_10") == "failed"

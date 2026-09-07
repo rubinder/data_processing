@@ -13,7 +13,9 @@ services:
     ports:
       - "8082:8081"
     volumes:
-      - ../flink_applications/flink_applications:/opt/flink-apps
+      # Mounted as a package dir so `from flink_applications.cdc_sql import`
+      # resolves when deploy.sh submit adds /opt/flink-apps to --pyFiles.
+      - ../flink_applications/flink_applications:/opt/flink-apps/flink_applications
     networks:
       - data-processing-network
 
@@ -28,7 +30,7 @@ services:
         taskmanager.numberOfTaskSlots: 2
         taskmanager.memory.process.size: 1728m
     volumes:
-      - ../flink_applications/flink_applications:/opt/flink-apps
+      - ../flink_applications/flink_applications:/opt/flink-apps/flink_applications
     depends_on:
       - flink-jobmanager
     networks:

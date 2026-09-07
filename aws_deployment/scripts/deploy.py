@@ -119,7 +119,37 @@ def parse_args() -> argparse.Namespace:
         default="",
         help="EC2 key pair for EMR instances",
     )
+    parser.add_argument(
+        "--environment",
+        default="dev",
+        choices=["dev", "staging", "prod"],
+        help="Environment name (names and cost-allocation tag)",
+    )
+    parser.add_argument(
+        "--cost-center",
+        default="data-platform",
+        help="CostCenter tag value",
+    )
+    parser.add_argument(
+        "--openlineage-url",
+        default="",
+        help="OpenLineage HTTP endpoint; empty disables lineage",
+    )
+    parser.add_argument(
+        "--openlineage-spark-version",
+        default="1.53.0",
+        help="io.openlineage:openlineage-spark_2.12 version",
+    )
+    _add_emr_bootstrap_arg(parser)
     return parser.parse_args()
+
+
+def _add_emr_bootstrap_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--emr-bootstrap-key",
+        default="",
+        help="S3 key of the EMR bootstrap script (empty disables it)",
+    )
 
 
 def main():
@@ -132,6 +162,17 @@ def main():
         {"ParameterKey": "VpcId", "ParameterValue": args.vpc_id},
         {"ParameterKey": "SubnetIds", "ParameterValue": args.subnet_ids},
         {"ParameterKey": "EmrKeyPair", "ParameterValue": args.emr_key_pair},
+        {"ParameterKey": "Environment", "ParameterValue": args.environment},
+        {"ParameterKey": "CostCenter", "ParameterValue": args.cost_center},
+        {"ParameterKey": "OpenLineageUrl", "ParameterValue": args.openlineage_url},
+        {
+            "ParameterKey": "EmrBootstrapScriptKey",
+            "ParameterValue": args.emr_bootstrap_key,
+        },
+        {
+            "ParameterKey": "OpenLineageSparkVersion",
+            "ParameterValue": args.openlineage_spark_version,
+        },
     ]
 
     try:

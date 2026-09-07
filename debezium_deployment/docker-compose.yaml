@@ -29,6 +29,28 @@ services:
     networks:
       - data-processing-network
 
+  # Confluent Schema Registry. Debezium registers one Avro schema version per
+  # table-shape change under <topic>-key / <topic>-value; Flink's
+  # avro-confluent format fetches writer schemas from here by id.
+  # Host port 8085 -> container 8081 because 8081/8082 are taken by Flink.
+  debezium-schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: debezium-schema-registry
+    hostname: debezium-schema-registry
+    depends_on:
+      - debezium-kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: debezium-schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://debezium-kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      # Global default; deploy.sh register also sets it explicitly per
+      # subject so the choice is visible in the REST API, not just here.
+      SCHEMA_REGISTRY_SCHEMA_COMPATIBILITY_LEVEL: BACKWARD
+    ports:
+      - "8085:8081"
+    networks:
+      - data-processing-network
+
   debezium-postgres:
     image: postgres:15
     container_name: debezium-postgres
@@ -58,12 +80,19 @@ services:
     networks:
       - data-processing-network
 
+  # Built from ./Dockerfile: debezium/connect:2.5 plus the Confluent Avro
+  # converter (not included upstream, see Dockerfile).
   debezium-connect:
-    image: debezium/connect:2.5
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: data-processing/debezium-connect-avro:2.5
     container_name: debezium-connect
     hostname: debezium-connect
     depends_on:
       debezium-kafka:
+        condition: service_started
+      debezium-schema-registry:
         condition: service_started
       debezium-postgres:
         condition: service_healthy
@@ -87,9 +116,11 @@ services:
     depends_on:
       - debezium-kafka
       - debezium-connect
+      - debezium-schema-registry
     environment:
       KAFKA_CLUSTERS_0_NAME: debezium-local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: debezium-kafka:9092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://debezium-schema-registry:8081
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: debezium
       KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://debezium-connect:8083
     ports:

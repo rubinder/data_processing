@@ -19,6 +19,18 @@ hello-world DAGs:
   failure callback hook for alerting.
 - **Fan-out.** ``api_pull`` is dynamically mapped over page_types instead of
   three copy-pasted tasks.
+- **Data-aware scheduling.** Tasks declare ``outlets`` on the shared
+  ``Dataset`` objects in ``datasets.py``. Downstream DAGs
+  (``impression_quality_checks``, a future dbt refresh) subscribe to those
+  datasets instead of guessing a cron offset; a backfill of one hour
+  re-triggers exactly that hour downstream. See ``datasets.py`` for the
+  rationale and the 2.x limits (URI is table-level, the logical date carries
+  the partition).
+
+Note: Airflow 2.x rejects ``sla`` on mapped tasks at parse time ("SLAs are
+unsupported with mapped tasks"), so the mapped ``pull_impressions`` sets
+``sla=None`` explicitly and the freshness SLA for the pull is enforced by
+``impression_quality_checks.check_freshness`` instead.
 """
 
 import os
@@ -27,6 +39,12 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.providers.apache.spark.operators.spark_submit import (
     SparkSubmitOperator,
+)
+
+from datasets import (
+    IMPRESSIONS_AGGREGATED,
+    IMPRESSIONS_PROCESSED,
+    IMPRESSIONS_RAW,
 )
 
 PAGE_TYPES = ["1", "2", "3"]
@@ -72,11 +90,17 @@ with DAG(
 ) as dag:
 
     # {{ ds }} -> YYYY-MM-DD, {{ logical_date }} -> hour of the scheduled run.
+    # api_pull lands raw/impressions (data.csv.gz + _manifest.json) and
+    # writes processed/impressions; both are outlets. Each mapped instance
+    # emits its own dataset event on success (3 per run) -- consumers that
+    # want one event per hour subscribe to IMPRESSIONS_AGGREGATED instead.
     pull_impressions = SparkSubmitOperator.partial(
         task_id="pull_impressions",
         conn_id="spark_local",
         application=API_PULL_APP,
         name="api_pull",
+        sla=None,  # unsupported on mapped tasks (parse-time error otherwise)
+        outlets=[IMPRESSIONS_RAW, IMPRESSIONS_PROCESSED],
     ).expand(
         application_args=[
             [
@@ -94,6 +118,7 @@ with DAG(
         conn_id="spark_local",
         application=AGGREGATION_APP,
         name="aggregation",
+        outlets=[IMPRESSIONS_AGGREGATED],
         application_args=[
             "--mode", SPARK_MODE,
             "--date", "{{ ds }}",

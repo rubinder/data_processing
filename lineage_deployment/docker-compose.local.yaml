@@ -1,0 +1,6 @@
+# Standalone override: a private network instead of the shared one created by
+# airflow_deployment. Usage: docker compose -f docker-compose.yaml -f docker-compose.local.yaml up -d
+networks:
+  data-processing-network:
+    external: false
+    name: lineage-local-network

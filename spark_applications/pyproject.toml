@@ -9,6 +9,15 @@ dependencies = [
     "requests>=2.31.0",
     "python-dotenv>=1.0.0",
     "delta-spark>=3.2.0",
+    # Required by the vectorised (pandas/Arrow) UDF path demonstrated in
+    # debugging/case_07_python_udf_to_pandas_udf.py.
+    "pandas>=1.5.0",
+    "pyarrow>=4.0.0",
+    # pyspark 3.5's pandas/pyarrow version checks still import distutils,
+    # which was removed from the stdlib in Python 3.12. setuptools restores
+    # it, so the pandas UDF path works on 3.12+ interpreters as well as on
+    # the project's stated 3.10 baseline.
+    "setuptools>=65.0.0",
 ]
 
 [project.optional-dependencies]

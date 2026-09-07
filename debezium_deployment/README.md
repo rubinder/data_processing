@@ -68,6 +68,26 @@ open http://localhost:8084
 ./deploy.sh exec-sql <file>    # Run SQL against the source database
 ```
 
+## Schema Registry and schema evolution
+
+The stack includes Confluent Schema Registry (`localhost:8085`). The default
+connector uses the Avro converter, so every table shape is a registered,
+versioned schema and the registry's `BACKWARD` compatibility mode refuses a
+change existing consumers could not read. Commands:
+
+| Command | Description |
+| --- | --- |
+| `schemas` | List subjects, latest version and field names |
+| `compat [MODE] [subject]` | Show or set compatibility (BACKWARD, FORWARD, FULL, their _TRANSITIVE variants, NONE) |
+| `evolve` | Apply `schema_changes.sql` (ADD / RENAME / DROP column) and show the new versions |
+| `evolve-incompatible` | Try to register a required field without a default and show the 409 |
+| `consume-avro` | Consume a topic with the Avro console consumer |
+| `register json` | Register the legacy JSON-converter connector instead |
+
+The measured walkthrough is in `SCHEMA_EVOLUTION.md`. Debezium Connect is
+built from `./Dockerfile` because the upstream image does not ship the
+Confluent Avro converter.
+
 ## Connector Configuration
 
 The connector config is at `connectors/postgres-source.json`. Key settings:

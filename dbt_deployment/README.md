@@ -100,3 +100,40 @@ psql -h localhost -p 5433 -U dbt -d data_processing
 | `DBT_POSTGRES_USER` | `dbt` | Database user |
 | `DBT_POSTGRES_PASSWORD` | `dbt` | Database password |
 | `API_BASE_URL` | `http://localhost:8000` | Web server API URL |
+
+## Schema migrations
+
+`init_db.sql` runs only when the PostgreSQL volume is created. Later changes
+to the raw schema live in `migrations/*.sql` (idempotent `ADD COLUMN IF NOT
+EXISTS` style) and are applied by `./deploy.sh migrate`, which `./deploy.sh
+up` also runs. `001_add_loaded_at.sql` adds the `loaded_at` watermark.
+
+## Model contracts
+
+Every model has `contract: enforced: true` in its `schema.yml` with a
+`data_type` per column. dbt compares the compiled SQL's column names and
+types against the contract *before* building, so a source change that would
+retype or drop a column fails the run with a clear diff instead of silently
+changing every downstream table. Adding a column to a model therefore means
+adding it to the contract too.
+
+## Source freshness
+
+`raw.impressions.loaded_at` is stamped once per `(page_type, date, hour)`
+batch by `load_data.py`. `models/staging/schema.yml` declares it as the
+source's `loaded_at_field` with an hourly-pipeline SLA (warn after 2 hours,
+error after 24):
+
+```bash
+./deploy.sh source-freshness
+```
+
+Rows whose source `date` fails the safe cast (`event_date` is NULL) are
+flagged by the warn-level test on `stg_impressions` and excluded from
+`int_impressions_aggregated`, so they never reach the analytics tables.
+
+## Lineage
+
+When `OPENLINEAGE_URL` is set, `deploy.sh` runs every dbt command through the
+`dbt-ol` wrapper (`openlineage-dbt`, in the image), which posts run events and
+model/source/test lineage to Marquez. See `../lineage_deployment/LINEAGE.md`.

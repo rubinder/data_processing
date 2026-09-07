@@ -1,13 +1,10 @@
-services:
-  flink-jobmanager:
-    networks:
-      - default
-
-  flink-taskmanager:
-    networks:
-      - default
-
+# Standalone override: swap the shared data-processing-network (created by
+# airflow_deployment) for debezium-local-network, the external network that
+# debezium_deployment's `local` mode uses. Joining the same network is what
+# lets the CDC job resolve debezium-kafka:9092 and
+# debezium-schema-registry:8081 in standalone mode; deploy.sh creates the
+# network on `up local` if debezium_deployment has not already.
 networks:
-  data-processing-network: !reset null
-  default:
-    driver: bridge
+  data-processing-network:
+    external: true
+    name: debezium-local-network

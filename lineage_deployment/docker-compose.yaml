@@ -1,0 +1,65 @@
+# Marquez: the OpenLineage reference backend + UI. Every emitter in this repo
+# (Spark listener, Airflow provider, dbt-ol, Glue/EMR) posts RunEvents to
+# marquez-api; marquez-web draws the job/dataset graph. Runs on the shared
+# data-processing-network so the Airflow and Spark containers reach it as
+# http://marquez-api:5000. `./deploy.sh up local` uses a standalone network.
+services:
+  marquez-db:
+    image: postgres:15
+    container_name: marquez-db
+    environment:
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      POSTGRES_DB: marquez
+    volumes:
+      - marquez-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "marquez"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - data-processing-network
+
+  marquez-api:
+    image: marquezproject/marquez:0.51.1
+    container_name: marquez-api
+    hostname: marquez-api
+    depends_on:
+      marquez-db:
+        condition: service_healthy
+    environment:
+      MARQUEZ_PORT: 5000
+      MARQUEZ_ADMIN_PORT: 5001
+      POSTGRES_HOST: marquez-db
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: marquez
+      POSTGRES_USER: marquez
+      POSTGRES_PASSWORD: marquez
+      MIGRATE_ON_STARTUP: "true"
+    ports:
+      - "5005:5000"   # OpenLineage endpoint: POST /api/v1/lineage (host 5005: macOS AirPlay squats 5000)
+      - "5006:5001"   # admin / healthcheck
+    networks:
+      - data-processing-network
+
+  marquez-web:
+    image: marquezproject/marquez-web:0.51.1
+    container_name: marquez-web
+    depends_on:
+      - marquez-api
+    environment:
+      MARQUEZ_HOST: marquez-api
+      MARQUEZ_PORT: 5000
+    ports:
+      - "3000:3000"
+    networks:
+      - data-processing-network
+
+volumes:
+  marquez-db-data:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

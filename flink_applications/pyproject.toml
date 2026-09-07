@@ -7,6 +7,9 @@ dependencies = [
     "apache-flink==1.18.1",
     "python-dotenv>=1.0.0",
     "requests>=2.31.0",
+    # apache-beam 2.48 (pinned by PyFlink 1.18) imports pkg_resources at
+    # runtime; setuptools>=80 removed it. Same constraint as the build dep.
+    "setuptools<80",
 ]
 
 [project.optional-dependencies]
@@ -18,3 +21,11 @@ dev = [
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+# apache-flink 1.18.1 pins apache-beam 2.48.0, which has no macOS arm64 wheel
+# and whose sdist setup.py imports pkg_resources (removed from recent
+# setuptools). Give the isolated build env an older setuptools so the sdist
+# builds. Python is pinned to 3.10 via .python-version (PyFlink 1.18 supports
+# 3.7-3.10 only).
+[tool.uv.extra-build-dependencies]
+apache-beam = ["setuptools<80"]

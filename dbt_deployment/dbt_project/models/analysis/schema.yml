@@ -1,43 +1,126 @@
 version: 2
 
+# Every analysis model carries an enforced contract: these tables are what
+# dashboards read, so a column changing type or disappearing must fail the
+# build, not the dashboard.
+
 models:
   - name: funnel_analysis
     description: >
       Funnel conversion analysis by page type showing how many impressions
       reach each event stage (a through f) and the conversion rates between stages.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: page_type
+        data_type: integer
         tests:
           - not_null
       - name: event_type
+        data_type: varchar
         tests:
           - not_null
+      - name: impressions_at_stage
+        data_type: bigint
+      - name: total_impressions
+        data_type: bigint
+      - name: pct_of_total
+        data_type: numeric
+      - name: pct_from_previous_stage
+        data_type: numeric
 
   - name: page_type_summary
     description: >
       High-level summary statistics per page type including total impressions,
       unique users, average funnel depth, and engagement metrics.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: page_type
+        data_type: integer
         tests:
           - not_null
           - unique
+      - name: total_impressions
+        data_type: bigint
+      - name: unique_users
+        data_type: bigint
+      - name: avg_funnel_depth
+        data_type: numeric
+      - name: max_funnel_depth
+        data_type: bigint
+      - name: avg_duration_seconds
+        data_type: numeric
+      - name: impressions_reaching_d
+        data_type: bigint
+      - name: impressions_reaching_e
+        data_type: bigint
+      - name: impressions_reaching_f
+        data_type: bigint
+      - name: pct_reaching_d
+        data_type: numeric
+      - name: pct_reaching_e
+        data_type: numeric
+      - name: pct_reaching_f
+        data_type: numeric
 
   - name: user_engagement
     description: >
       User-level engagement metrics showing activity across page types,
       total impressions, average funnel depth, and most engaged page type.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: user_id
+        data_type: varchar
         tests:
           - not_null
           - unique
+      - name: total_impressions
+        data_type: bigint
+      - name: page_types_visited
+        data_type: bigint
+      - name: avg_funnel_depth
+        data_type: numeric
+      - name: max_funnel_depth
+        data_type: bigint
+      - name: total_events
+        data_type: numeric
+      - name: first_seen
+        data_type: timestamp
+      - name: last_seen
+        data_type: timestamp
+      - name: most_engaged_page_type
+        data_type: integer
+      - name: impressions_on_top_page
+        data_type: bigint
 
   - name: hourly_traffic
     description: >
       Hourly traffic patterns by page type showing impression volume
       and engagement metrics over time.
+    config:
+      contract:
+        enforced: true
     columns:
       - name: event_date
+        data_type: date
         tests:
           - not_null
+      - name: hour
+        data_type: integer
+      - name: page_type
+        data_type: integer
+      - name: total_impressions
+        data_type: bigint
+      - name: unique_users
+        data_type: bigint
+      - name: avg_funnel_depth
+        data_type: numeric
+      - name: impressions_reaching_d
+        data_type: bigint
+      - name: pct_reaching_d
+        data_type: numeric
