@@ -327,8 +327,12 @@ sink.
   found on the way (nullability comes from the live catalog, not the WAL
   position, so rapid DDL shows up as optional one version early).
 - Verified: 12 pure SQL-builder tests, compose validation, the live registry
-  run above. The Flink job's behaviour across the four versions follows from
-  Avro resolution and was not re-run end to end in this session.
+  run above, and on 2026-09-08 the Flink job itself: it ran through versions
+  1 to 4 without a restart, emitted count windows for records written under
+  each version, and a bounded probe through the same reader schema showed
+  `event_minute` resolving to NULL from the rename onward and `event_second`
+  from the drop onward, with earlier records intact
+  (`debezium_deployment/SCHEMA_EVOLUTION.md`, "What Flink did").
 
 ---
 

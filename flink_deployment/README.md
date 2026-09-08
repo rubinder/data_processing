@@ -65,6 +65,10 @@ CDC_SINK=print ./deploy.sh submit cdc_impressions.py local
 ../debezium_deployment/deploy.sh consume cdc.impressions.page_type_counts local
 ```
 
+The services are pinned to `platform: linux/amd64`: PyFlink 1.18.1's
+dependencies (`apache-beam 2.48`, `pemja`) have no arm64 Linux wheels and the
+image build fails on Apple Silicon without it; Docker Desktop emulates amd64.
+
 The image installs `flink-sql-connector-kafka` and
 `flink-sql-avro-confluent-registry` into `/opt/flink/lib` (the base image ships
 neither; without them a `'connector' = 'kafka'` table fails at plan time). Jar
