@@ -185,3 +185,21 @@ SELECT page_type, date, hour, count(*) AS rows
 FROM "data-processing_db".processed
 GROUP BY 1, 2, 3;
 ```
+
+
+## Lineage capture endpoint and the Athena verification step
+
+`LineageSinkEnabled=true` (`LINEAGE_SINK_ENABLED=true ./scripts/deploy.sh`)
+adds an API Gateway HTTP API + Lambda that accepts OpenLineage events and
+logs them to CloudWatch, for verifying the Glue / EMR / Lambda emitters when
+no Marquez is reachable from AWS. Two passes: deploy with the sink on, read
+`LineageSinkUrl`, deploy again with `OPENLINEAGE_URL` set to it. Replay the
+captured events into a local Marquez with
+`../lineage_deployment/replay_cloudwatch.py`. Off by default; it is a public,
+unauthenticated endpoint meant for verification, not a lineage store.
+
+The Step Function ends with `VerifyInAthena`: `lambda/athena_lineage.py`
+counts the landed partition in the `processed` table through the workgroup,
+returns the count into the execution output, and emits the Athena run's
+OpenLineage events (parent = the Step Function execution). Details in
+`../lineage_deployment/LINEAGE.md`.

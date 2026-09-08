@@ -152,6 +152,12 @@ def parse_args() -> argparse.Namespace:
         help="io.openlineage:openlineage-spark_2.12 version",
     )
     _add_emr_bootstrap_arg(parser)
+    parser.add_argument(
+        "--lineage-sink-enabled",
+        default="false",
+        choices=["true", "false"],
+        help="Create the OpenLineage capture Function URL (LineageSinkEnabled)",
+    )
     return parser.parse_args()
 
 
@@ -179,6 +185,10 @@ def main():
         {
             "ParameterKey": "EmrBootstrapScriptKey",
             "ParameterValue": args.emr_bootstrap_key,
+        },
+        {
+            "ParameterKey": "LineageSinkEnabled",
+            "ParameterValue": args.lineage_sink_enabled,
         },
         {
             "ParameterKey": "OpenLineageSparkVersion",

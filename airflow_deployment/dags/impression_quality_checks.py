@@ -24,10 +24,12 @@ date of the *producer* run attached to the triggering dataset event
 trigger has no events; it then honours ``params.date``/``params.hour`` or,
 failing that, the current UTC hour.
 
-The checks read the local storage layout only (``PIPELINE_DATA_DIR``, shared
-with the Spark driver via a bind mount, see docker-compose.yaml). In
-``SPARK_MODE=aws`` status lives in DynamoDB and manifests on S3; the tasks
-skip with a message rather than pretend.
+Storage follows ``SPARK_MODE`` (``quality_checks.quality_source``): ``local``
+reads status files and manifests under ``PIPELINE_DATA_DIR`` (shared with the
+Spark driver via a bind mount, see docker-compose.yaml); ``aws`` reads the
+DynamoDB status table (``DYNAMODB_TABLE``) and the manifests in the landing
+bucket (``S3_LANDING_BUCKET`` / ``S3_BUCKET``), i.e. exactly what
+``AwsStorageAdapter`` writes.
 """
 
 import json
@@ -35,17 +37,14 @@ import os
 from datetime import datetime, timezone
 
 from airflow import DAG
-from airflow.exceptions import AirflowSkipException
 from airflow.operators.python import PythonOperator
 
 from datasets import IMPRESSIONS_AGGREGATED
 from quality_checks import (
-    baseline_manifest_paths,
-    check_freshness,
-    check_volume,
-    manifest_path,
+    freshness_from_records,
+    quality_source,
     resolve_partition,
-    status_dir,
+    volume_from_manifests,
 )
 
 PAGE_TYPES = ["1", "2", "3"]
@@ -58,6 +57,8 @@ MAX_RATIO = float(os.environ.get("VOLUME_MAX_RATIO", "2.0"))
 MAX_QUARANTINE_RATIO = float(
     os.environ.get("MAX_QUARANTINE_RATIO", "0.01")
 )
+LANDING_BUCKET = os.environ.get("S3_LANDING_BUCKET") or os.environ.get("S3_BUCKET")
+DYNAMODB_TABLE = os.environ.get("DYNAMODB_TABLE")
 
 
 def _log(event: str, **fields) -> None:
@@ -65,12 +66,8 @@ def _log(event: str, **fields) -> None:
     print(json.dumps({"event": event, **fields}, default=str))
 
 
-def _require_local_mode() -> None:
-    if SPARK_MODE != "local":
-        raise AirflowSkipException(
-            f"quality checks read the local data layout; SPARK_MODE="
-            f"{SPARK_MODE} keeps status in DynamoDB and manifests on S3"
-        )
+def _source():
+    return quality_source(SPARK_MODE, DATA_DIR, LANDING_BUCKET, DYNAMODB_TABLE)
 
 
 def _target_partition(context: dict) -> tuple[str, str]:
@@ -90,25 +87,29 @@ def _target_partition(context: dict) -> tuple[str, str]:
 
 
 def run_freshness_check(**context) -> float:
-    _require_local_mode()
-    age = check_freshness(status_dir(DATA_DIR), FRESHNESS_SLA_MINUTES)
+    source = _source()
+    age = freshness_from_records(
+        source.status_records(), FRESHNESS_SLA_MINUTES,
+        source=source.describe(),
+    )
     _log(
         "freshness_ok", age_seconds=age.total_seconds(),
-        sla_minutes=FRESHNESS_SLA_MINUTES,
+        sla_minutes=FRESHNESS_SLA_MINUTES, source=source.describe(),
     )
     return age.total_seconds()
 
 
 def run_volume_check(**context) -> dict:
-    _require_local_mode()
+    source = _source()
     date, hour = _target_partition(context)
-    _log("volume_check_start", date=date, hour=hour)
+    _log("volume_check_start", date=date, hour=hour, source=source.describe())
     results = {}
     for page_type in PAGE_TYPES:
-        result = check_volume(
-            manifest_path(DATA_DIR, page_type, date, hour),
-            baseline_manifest_paths(
-                DATA_DIR, page_type, date, hour, days=BASELINE_DAYS
+        label, current = source.manifest(page_type, date, hour)
+        result = volume_from_manifests(
+            current, label,
+            source.baseline_manifests(
+                page_type, date, hour, days=BASELINE_DAYS
             ),
             min_ratio=MIN_RATIO,
             max_ratio=MAX_RATIO,
