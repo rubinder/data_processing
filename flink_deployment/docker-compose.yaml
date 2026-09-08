@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # amd64 even on Apple Silicon: apache-flink 1.18.1 pulls apache-beam
+    # 2.48 / pemja, which ship no arm64 Linux wheels and fail to build from
+    # source inside the image. Docker Desktop runs amd64 under emulation.
+    platform: linux/amd64
     container_name: flink-jobmanager
     hostname: flink-jobmanager
     command: jobmanager
@@ -23,6 +27,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # amd64 even on Apple Silicon: apache-flink 1.18.1 pulls apache-beam
+    # 2.48 / pemja, which ship no arm64 Linux wheels and fail to build from
+    # source inside the image. Docker Desktop runs amd64 under emulation.
+    platform: linux/amd64
     command: taskmanager
     environment:
       FLINK_PROPERTIES: |

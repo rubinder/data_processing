@@ -162,7 +162,7 @@ should ship with a short written narrative of the issue and its resolution
 ### Discovered 2026-09-04 (not yet done)
 - [x] Run the cluster protocol (cases 01, 07, production before/after) — done, see above
 - [x] Deploy the CloudFormation stack and verify what cfn-lint cannot — deployed 2026-09-06 (`data-processing-pipeline`, account 194611079924, us-east-1). `AWS::NoValue` in EMR properties and Glue arguments drops keys cleanly; Glue 5.0 honours the folded `--conf` (zstd output); Athena cutoff enforced. Seven pre-existing defects found and fixed on the way (DECISIONS.md #8). Full S3 → Lambda → Step Function → Batch → Crawler → Glue run: `ExecutionSucceeded`. The OpenLineage jar on Glue remains untested (lineage was off for the deployment)
-- [ ] Run the Flink CDC job end to end against the evolved topic (versions 1-4) and record the NULL-resolution behaviour `SCHEMA_EVOLUTION.md` derives from Avro rules
+- [x] Flink CDC job run end to end across schema versions 1-4 (2026-09-08): job stayed RUNNING, emitted windows for post-evolve records; bounded probe shows event_minute NULL from v3 and event_second NULL from v4 while v1/v2 records keep both. `debezium_deployment/SCHEMA_EVOLUTION.md`
 - [ ] `impression_quality_checks` reads the local layout only; add boto3 readers for DynamoDB status + S3 manifests so it works in `SPARK_MODE=aws`
 - [ ] Emit Athena lineage from the Step Function / Lambda (`LINEAGE.md` has the `openlineage-python` pattern) — currently the only manual hop
 - [ ] `flink_applications/tests/test_hello_world.py` asserts on captured stdout, but the Table API `print()` writes from the JVM and pytest's capsys does not see it; make the test assert on a collected result instead

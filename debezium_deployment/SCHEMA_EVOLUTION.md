@@ -127,7 +127,70 @@ which has no registry and therefore no gate: a renamed column simply shows up
 as a missing key and Flink's `json.ignore-parse-errors` hides the damage.
 That contrast is the reason for the registry.
 
-Verified live on 2026-09-04: registry, connector and the four versions above.
-The Flink job's behaviour across the versions follows from Avro resolution
-rules documented in `flink_applications/flink_applications/cdc_sql.py` and
-was not re-run end to end in this session.
+## What Flink did (measured, 2026-09-08)
+
+The streaming job (`cdc_impressions.py`, `avro-confluent` source,
+`upsert-kafka` sink) was running while `./deploy.sh evolve` applied the three
+ALTERs. It never restarted or failed:
+
+```
+=== flink job after evolve ===
+48a6d3e1644a90922757b0aededcde9a : insert-into_default_catalog.default_database.page_type_counts (RUNNING)
+Subject cdc.impressions.events-value: versions [1,2,3,4]
+```
+
+and it kept emitting windows for records written under the new schema
+versions (the three `evolve` inserts land in the 15:58 window, three more
+v4-shaped inserts in 16:00):
+
+```
+page_type=1 window=15:52:00 .. 15:53:00 events=3  impressions=1   <- v1 (snapshot + sample_changes)
+page_type=2 window=15:52:00 .. 15:53:00 events=6  impressions=2
+page_type=3 window=15:52:00 .. 15:53:00 events=11 impressions=2
+page_type=1 window=15:58:00 .. 15:59:00 events=1  impressions=1   <- v2 record (ADD COLUMN)
+page_type=2 window=15:58:00 .. 15:59:00 events=1  impressions=1   <- v3 record (RENAME)
+page_type=3 window=15:58:00 .. 15:59:00 events=1  impressions=1   <- v4 record (DROP)
+page_type=1 window=16:00:00 .. 16:01:00 events=2  impressions=1   <- v4-shaped inserts
+page_type=2 window=16:00:00 .. 16:01:00 events=1  impressions=1
+```
+
+A bounded read of the same topic through the same reader schema (Flink SQL
+client, `scan.bounded.mode = latest-offset`) shows the resolution per record:
+
+```
+| event_id | page_type | event_hour | event_minute | event_second | __op |
+|        1 |         1 |         10 |           30 |           15 |    r |   v1: both present
+|      ... |           |            |              |              |      |
+|       20 |         3 |         16 |           20 |           25 |    c |
+|       21 |         1 |          8 |            5 |           10 |    c |   v2: ADD COLUMN referrer -> ignored, both still present
+|       22 |         2 |          9 |       <NULL> |           20 |    c |   v3: RENAME event_minute -> NULL, event_second present
+|       23 |         3 |         10 |       <NULL> |       <NULL> |    c |   v4: DROP event_second -> both NULL
+|       24 |         1 |         12 |       <NULL> |       <NULL> |    c |
+|      ... |           |            |              |              |      |
+27 rows in set
+```
+
+Exactly the behaviour the Avro rules predict: a writer field the reader does
+not declare (`referrer`, `minute_of_hour`) is skipped; a reader field the
+writer no longer has (`event_minute` from v3, `event_second` from v4) takes
+its `null` default. The aggregate reads only `page_type`, `impression_id`,
+`__op` and `__source_ts_ms`, none of which changed, so the counts are
+unaffected. Had the query depended on `event_minute`, the failure mode would
+have been silent NULLs, not an error; that is what the registry's
+compatibility gate and the DDL-as-contract are for.
+
+Two things the run needed that are not obvious from the code:
+
+- **Windows close on watermarks, not on wall-clock.** The v1 window emitted
+  nothing until the `evolve` inserts advanced the event-time watermark past
+  its end; the 16:00 window needed one more insert for the same reason. A
+  consumer that sees an empty output topic right after start-up is not
+  broken, it is waiting for the next event.
+- **The Flink image must be built for `linux/amd64`** even on Apple Silicon
+  (`flink_deployment/docker-compose.yaml` pins it): `apache-flink 1.18.1`
+  drags in `apache-beam 2.48` / `pemja`, which have no arm64 Linux wheels
+  and fail to build from source inside the image.
+
+Verified live: registry and connector on 2026-09-04; the Flink job across
+versions 1 to 4, the count windows and the per-record resolution above on
+2026-09-08.
