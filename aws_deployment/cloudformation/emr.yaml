@@ -90,8 +90,23 @@ Parameters:
       Python 3.10-baseline spark_applications jobs run on EMR 7.x (Python 3.9
       default). Empty disables the bootstrap and the interpreter override.
 
+  EmrOpenLineageJar:
+    Type: String
+    Default: shipped
+    AllowedValues: [shipped, maven]
+    Description: >-
+      Which OpenLineage Spark listener EMR loads when OpenLineageUrl is set.
+      "shipped" uses the io.openlineage listener class already on the EMR 7.x
+      Spark classpath (/usr/share/aws/datazone-openlineage-spark/lib) and
+      adds nothing; "maven" also resolves io.openlineage:openlineage-spark_2.12
+      via spark.jars.packages (needs outbound internet) and puts a second
+      copy of the listener on the classpath.
+
 Conditions:
   HasOpenLineage: !Not [!Equals [!Ref OpenLineageUrl, ""]]
+  UseMavenOpenLineage: !And
+    - !Condition HasOpenLineage
+    - !Equals [!Ref EmrOpenLineageJar, maven]
   HasEmrKeyPair: !Not [!Equals [!Ref EmrKeyPair, ""]]
   HasEmrBootstrap: !Not [!Equals [!Ref EmrBootstrapScriptKey, ""]]
 
@@ -307,7 +322,7 @@ Resources:
             # so cluster nodes need outbound internet (NAT) for this to
             # work. Use a bootstrap action + spark.jars if they do not.
             spark.jars.packages: !If
-              - HasOpenLineage
+              - UseMavenOpenLineage
               - !Sub "io.openlineage:openlineage-spark_2.12:${OpenLineageSparkVersion}"
               - !Ref AWS::NoValue
             spark.extraListeners: !If

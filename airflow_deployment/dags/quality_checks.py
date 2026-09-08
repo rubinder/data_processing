@@ -161,15 +161,28 @@ def check_freshness(
     just complete something. Whether the *current* hour landed is the volume
     check's job.
     """
+    return freshness_from_records(
+        load_status_records(status_dir_path), sla_minutes, now=now,
+        source=f"status files under {status_dir_path}",
+    )
+
+
+def freshness_from_records(
+    records: Iterable[StatusRecord],
+    sla_minutes: int,
+    now: datetime | None = None,
+    source: str = "status records",
+) -> timedelta:
+    """Storage-agnostic core of :func:`check_freshness`.
+
+    Takes already-loaded records so the same rule runs over local status
+    files (``LocalQualitySource``) and the DynamoDB status table
+    (``AwsQualitySource``).
+    """
     now = now or datetime.now(timezone.utc)
-    completed = [
-        r for r in load_status_records(status_dir_path)
-        if r.status == "completed"
-    ]
+    completed = [r for r in records if r.status == "completed"]
     if not completed:
-        raise FreshnessError(
-            f"no completed status files under {status_dir_path}"
-        )
+        raise FreshnessError(f"no completed runs in {source}")
     newest = max(completed, key=lambda r: r.updated_at)
     age = now - newest.updated_at
     sla = timedelta(minutes=sla_minutes)
@@ -233,6 +246,9 @@ def check_volume(
 ) -> VolumeResult:
     """Compare this hour's rows_written to the median of the baselines.
 
+    Local-filesystem entry point; the rule itself is
+    :func:`volume_from_manifests`, shared with the AWS source.
+
     * Current manifest missing -> ``VolumeError`` (the hour did not land).
     * Baseline manifest missing -> a warning, not a failure (first days of a
       new page_type, or a gap that was never backfilled). With no baselines at
@@ -243,13 +259,40 @@ def check_volume(
       ``VolumeError``. This is checked first: a quarantine spike is the
       more specific diagnosis (see RUNBOOK.md, quarantine section).
     """
-    if not os.path.isfile(manifest_path_):
-        raise VolumeError(f"current manifest missing: {manifest_path_}")
-    current = load_manifest(manifest_path_)
-    rows_read = _int_field(current, "rows_read", manifest_path_)
-    rows_written = _int_field(current, "rows_written", manifest_path_)
-    rows_quarantined = _int_field(current, "rows_quarantined", manifest_path_)
-    job_id = str(current.get("job_id", manifest_path_))
+    current = load_manifest(manifest_path_) if os.path.isfile(
+        manifest_path_
+    ) else None
+    baselines = [
+        (path, load_manifest(path) if os.path.isfile(path) else None)
+        for path in baseline_manifest_paths_
+    ]
+    return volume_from_manifests(
+        current, manifest_path_, baselines,
+        min_ratio=min_ratio, max_ratio=max_ratio,
+        max_quarantine_ratio=max_quarantine_ratio,
+    )
+
+
+def volume_from_manifests(
+    current: dict | None,
+    current_label: str,
+    baselines: Iterable[tuple[str, dict | None]],
+    min_ratio: float = 0.5,
+    max_ratio: float = 2.0,
+    max_quarantine_ratio: float = 0.01,
+) -> VolumeResult:
+    """Storage-agnostic core of :func:`check_volume`.
+
+    ``current`` is the manifest dict for the checked hour (``None`` if it was
+    not found); ``baselines`` pairs each baseline's label with its manifest
+    dict or ``None`` when missing.
+    """
+    if current is None:
+        raise VolumeError(f"current manifest missing: {current_label}")
+    rows_read = _int_field(current, "rows_read", current_label)
+    rows_written = _int_field(current, "rows_written", current_label)
+    rows_quarantined = _int_field(current, "rows_quarantined", current_label)
+    job_id = str(current.get("job_id", current_label))
 
     warnings: list[str] = []
 
@@ -265,12 +308,13 @@ def check_volume(
     if rows_read == 0:
         warnings.append(f"{job_id}: rows_read is 0")
 
-    baselines: list[int] = []
-    for path in baseline_manifest_paths_:
-        if not os.path.isfile(path):
-            warnings.append(f"missing baseline manifest: {path}")
+    baseline_counts: list[int] = []
+    for label, manifest in baselines:
+        if manifest is None:
+            warnings.append(f"missing baseline manifest: {label}")
             continue
-        baselines.append(_int_field(load_manifest(path), "rows_written", path))
+        baseline_counts.append(_int_field(manifest, "rows_written", label))
+    baselines = baseline_counts
 
     median: float | None = None
     ratio: float | None = None
@@ -306,3 +350,119 @@ def check_volume(
         ratio=ratio,
         warnings=warnings,
     )
+
+
+# --------------------------------------------------------------------------
+# Sources: where status records and manifests live per SPARK_MODE
+# --------------------------------------------------------------------------
+
+RAW_MANIFEST_KEY = "raw/impressions/page_type={pt}/date={d}/hour={h}/_manifest.json"
+
+
+def _previous_days(date: str, days: int) -> list[str]:
+    day = datetime.strptime(date, "%Y-%m-%d").date()
+    return [(day - timedelta(days=n)).isoformat() for n in range(1, days + 1)]
+
+
+class LocalQualitySource:
+    """Status files + manifests under ``PIPELINE_DATA_DIR`` (SPARK_MODE=local).
+
+    Layout written by ``spark_applications`` ``LocalStorageAdapter``.
+    """
+
+    def __init__(self, data_dir: str):
+        self.data_dir = data_dir
+
+    def describe(self) -> str:
+        return f"local data dir {self.data_dir}"
+
+    def status_records(self) -> list[StatusRecord]:
+        return load_status_records(status_dir(self.data_dir))
+
+    def manifest(self, page_type: str, date: str, hour: str):
+        path = manifest_path(self.data_dir, page_type, date, hour)
+        return path, (load_manifest(path) if os.path.isfile(path) else None)
+
+    def baseline_manifests(
+        self, page_type: str, date: str, hour: str, days: int
+    ) -> list[tuple[str, dict | None]]:
+        return [
+            self.manifest(page_type, previous, hour)
+            for previous in _previous_days(date, days)
+        ]
+
+
+class AwsQualitySource:
+    """DynamoDB status table + S3 manifests (SPARK_MODE=aws).
+
+    Mirrors ``spark_applications`` ``AwsStorageAdapter``: status items are
+    ``{job_id, status, updated_at}`` in the DynamoDB table and manifests sit
+    at ``raw/impressions/page_type=..%/date=../hour=../_manifest.json`` in the
+    landing bucket. Clients are injectable so the class tests with
+    ``botocore.stub.Stubber`` and no network.
+    """
+
+    def __init__(self, bucket: str, table_name: str, s3=None, dynamodb=None):
+        import boto3
+
+        self.bucket = bucket
+        self.table_name = table_name
+        self.s3 = s3 or boto3.client("s3")
+        self.dynamodb = dynamodb or boto3.client("dynamodb")
+
+    def describe(self) -> str:
+        return f"DynamoDB {self.table_name} / s3://{self.bucket}"
+
+    def status_records(self) -> list[StatusRecord]:
+        # The status table is one item per job_id (tens of thousands at most
+        # after years of hourly runs); a paginated scan is the simplest
+        # correct read and runs once per check.
+        records: list[StatusRecord] = []
+        paginator = self.dynamodb.get_paginator("scan")
+        for page in paginator.paginate(TableName=self.table_name):
+            for item in page.get("Items", []):
+                try:
+                    records.append(
+                        StatusRecord(
+                            job_id=item["job_id"]["S"],
+                            status=item["status"]["S"],
+                            updated_at=parse_timestamp(item["updated_at"]["S"]),
+                        )
+                    )
+                except (KeyError, ValueError, TypeError):
+                    continue
+        return records
+
+    def manifest(self, page_type: str, date: str, hour: str):
+        key = RAW_MANIFEST_KEY.format(pt=page_type, d=date, h=hour)
+        label = f"s3://{self.bucket}/{key}"
+        try:
+            body = self.s3.get_object(Bucket=self.bucket, Key=key)["Body"]
+        except self.s3.exceptions.NoSuchKey:
+            return label, None
+        return label, json.loads(body.read())
+
+    def baseline_manifests(
+        self, page_type: str, date: str, hour: str, days: int
+    ) -> list[tuple[str, dict | None]]:
+        return [
+            self.manifest(page_type, previous, hour)
+            for previous in _previous_days(date, days)
+        ]
+
+
+def quality_source(
+    spark_mode: str,
+    data_dir: str,
+    bucket: str | None = None,
+    table_name: str | None = None,
+):
+    """Pick the source for the pipeline's storage mode."""
+    if spark_mode == "aws":
+        if not bucket or not table_name:
+            raise QualityCheckError(
+                "SPARK_MODE=aws needs S3_LANDING_BUCKET (or S3_BUCKET) and "
+                "DYNAMODB_TABLE"
+            )
+        return AwsQualitySource(bucket, table_name)
+    return LocalQualitySource(data_dir)

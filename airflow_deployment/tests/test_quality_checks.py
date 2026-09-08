@@ -179,3 +179,102 @@ def test_volume_quarantine_ratio_breach_fails_first(tmp_path):
     # Configurable ceiling.
     result = check_volume(current, [], max_quarantine_ratio=0.2)
     assert result.quarantine_ratio == 0.1
+
+
+# --- storage sources (local + AWS) ------------------------------------------
+
+from botocore.stub import Stubber  # noqa: E402
+import boto3  # noqa: E402
+
+from quality_checks import (  # noqa: E402
+    AwsQualitySource,
+    LocalQualitySource,
+    QualityCheckError,
+    freshness_from_records,
+    quality_source,
+    volume_from_manifests,
+)
+
+
+def test_local_source_matches_path_functions(tmp_path):
+    _write_status(tmp_path, "j1", "completed", NOW - timedelta(minutes=5))
+    current = manifest_path(str(tmp_path), "1", "2026-01-08", "10")
+    _write_manifest(current, 1_000, 1_000, 0)
+    source = LocalQualitySource(str(tmp_path))
+
+    assert [r.job_id for r in source.status_records()] == ["j1"]
+    label, manifest = source.manifest("1", "2026-01-08", "10")
+    assert label == current and manifest["rows_written"] == 1_000
+    baselines = source.baseline_manifests("1", "2026-01-08", "10", days=2)
+    assert [m for _, m in baselines] == [None, None]
+    assert freshness_from_records(source.status_records(), 90, now=NOW) == (
+        timedelta(minutes=5)
+    )
+    result = volume_from_manifests(manifest, label, baselines)
+    assert result.rows_written == 1_000 and result.baseline_count == 0
+
+
+def _aws_source():
+    # Explicit dummy credentials: Stubber never hits the network, but the
+    # client still resolves a credential chain to sign, and on a machine with
+    # an `aws login` profile that chain needs botocore[crt].
+    creds = {"aws_access_key_id": "test", "aws_secret_access_key": "test",
+             "region_name": "us-east-1"}
+    s3 = boto3.client("s3", **creds)
+    ddb = boto3.client("dynamodb", **creds)
+    return AwsQualitySource("landing", "status", s3=s3, dynamodb=ddb), s3, ddb
+
+
+def test_aws_source_reads_dynamodb_status_items():
+    source, _, ddb = _aws_source()
+    with Stubber(ddb) as stub:
+        stub.add_response("scan", {
+            "Items": [
+                {"job_id": {"S": "impression_1_2026-01-01_10"},
+                 "status": {"S": "completed"},
+                 "updated_at": {"S": "2026-01-01T11:00:00+00:00"}},
+                {"job_id": {"S": "impression_2_2026-01-01_10"},
+                 "status": {"S": "failed"},
+                 "updated_at": {"S": "2026-01-01T11:30:00+00:00"}},
+                {"job_id": {"S": "broken"}, "status": {"S": "completed"}},
+            ],
+        }, {"TableName": "status"})
+        records = source.status_records()
+    assert [r.job_id for r in records] == [
+        "impression_1_2026-01-01_10", "impression_2_2026-01-01_10",
+    ]
+    age = freshness_from_records(records, sla_minutes=90, now=NOW)
+    assert age == timedelta(hours=1)          # newest *completed*, not failed
+
+
+def test_aws_source_reads_manifests_and_tolerates_missing(tmp_path):
+    source, s3, _ = _aws_source()
+    import io
+    body = json.dumps({"job_id": "j", "rows_read": 10, "rows_written": 9,
+                       "rows_quarantined": 1}).encode()
+    with Stubber(s3) as stub:
+        stub.add_response("get_object", {"Body": io.BytesIO(body)}, {
+            "Bucket": "landing",
+            "Key": "raw/impressions/page_type=1/date=2026-01-08/hour=10/_manifest.json",
+        })
+        stub.add_client_error("get_object", "NoSuchKey", expected_params={
+            "Bucket": "landing",
+            "Key": "raw/impressions/page_type=1/date=2026-01-07/hour=10/_manifest.json",
+        })
+        label, current = source.manifest("1", "2026-01-08", "10")
+        baselines = source.baseline_manifests("1", "2026-01-08", "10", days=1)
+    assert label.startswith("s3://landing/raw/impressions/")
+    assert current["rows_written"] == 9
+    assert baselines[0][1] is None
+    # Same rule as the local path: 10% quarantine breaches the 1% default.
+    with pytest.raises(VolumeError, match="quarantine ratio"):
+        volume_from_manifests(current, label, baselines)
+    result = volume_from_manifests(current, label, baselines,
+                                   max_quarantine_ratio=0.2)
+    assert any("missing baseline" in w for w in result.warnings)
+
+
+def test_quality_source_selection(tmp_path):
+    assert isinstance(quality_source("local", str(tmp_path)), LocalQualitySource)
+    with pytest.raises(QualityCheckError, match="SPARK_MODE=aws needs"):
+        quality_source("aws", str(tmp_path))

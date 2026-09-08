@@ -163,10 +163,59 @@ writes `processed/impressions`, `aggregation` reads it and writes
 `impressions_aggregated`; the dbt jobs hang off `raw.impressions`. With
 Airflow on, each Spark run nests under its task.
 
+## Measured on AWS (2026-09-08)
+
+Marquez runs on a laptop that Glue, EMR and Lambda cannot reach, so the
+stack has an optional **capture endpoint**: `LineageSinkEnabled=true` creates
+an API Gateway HTTP API in front of a small Lambda
+(`aws_deployment/lambda/lineage_sink.py`) that accepts `POST /api/v1/lineage`
+and logs every RunEvent to CloudWatch. Deploy once with the sink on, read the
+`LineageSinkUrl` output, deploy again with `OPENLINEAGE_URL` set to it.
+`replay_cloudwatch.py` then pulls the captured events and POSTs them to a
+Marquez you can reach, preserving order and run ids:
+
+```bash
+LINEAGE_SINK_ENABLED=true ./scripts/deploy.sh                       # pass 1: creates the sink, prints LineageSinkUrl
+OPENLINEAGE_URL=<LineageSinkUrl> LINEAGE_SINK_ENABLED=true ./scripts/deploy.sh   # pass 2: Glue + Lambda emit
+OPENLINEAGE_URL=<LineageSinkUrl> ./scripts/emr.sh up                # EMR emits too
+lineage_deployment/deploy.sh up local
+uv run --with boto3 --with 'botocore[crt]' python lineage_deployment/replay_cloudwatch.py \
+    --log-group /aws/lambda/data-processing-lineage-sink --since-hours 3 --marquez http://localhost:5005
+```
+
+What arrived, from one S3 landing driving the pipeline plus one EMR step:
+
+| emitter | job (namespace `data-processing`) | inputs -> outputs |
+| --- | --- | --- |
+| Glue 5.0, `openlineage-spark_2.12` 1.53.0 via `--extra-jars` | `data_processing_etl.adaptive_spark_plan.processed` | `s3://landing/raw/impressions/page_type=1/date=2026-09-06/hour=10/data.csv.gz` -> `s3://processed/processed` |
+| Glue | `data_processing_etl.adaptive_spark_plan.quarantine_<run>` | same input -> `s3://processed/quarantine/<run>` |
+| Lambda (`athena_lineage.py`, stdlib HTTP) | `athena.processed_partition_count`, parent run = the Step Function execution | `awsathena://athena.us-east-1.amazonaws.com/data-processing_db.processed` -> `s3://processed/athena-results/<query>.csv`, facets: SQL, `dataScannedInBytes` (0), rows (68,367) |
+| EMR 7.13, **shipped** listener (`/usr/share/aws/datazone-openlineage-spark`), no Maven jar | `cluster_measure.overwrite_by_expression.noop-table` | START/RUNNING/COMPLETE per leg |
+
+Two findings worth keeping:
+
+- **The Athena hop is no longer manual.** The Step Function's last state,
+  `VerifyInAthena`, runs the partition count through the workgroup and emits
+  START/COMPLETE (or FAIL with an `errorMessage` facet; the first live run
+  produced one: `TYPE_MISMATCH ... varchar = integer`, because crawler
+  partition keys are strings, now quoted). Its `parent` facet names the Step
+  Function execution, so the Athena run nests under the pipeline run in
+  Marquez, and the SQL facet carries the query text.
+- **EMR's shipped OpenLineage jar is enough.** `EmrOpenLineageJar=shipped`
+  (the default) adds nothing to `spark.jars.packages`; the listener class
+  already on the classpath posted events over http to the sink. The `maven`
+  option remains for pinning a specific upstream version, at the cost of two
+  listener copies on the classpath.
+
+The sink is a capture tool, not a store: public endpoint (no auth), events
+live only as long as the log retention, and `LineageSinkEnabled` defaults
+to `false`.
+
 ## Gaps
 
-- **Athena is manual.** Until the query runner emits events, the graph stops
-  at the Glue catalog table.
+- **Athena lineage covers the pipeline's own verification query only.**
+  Ad-hoc queries in the workgroup still emit nothing; a query runner that
+  wraps them the way `athena_lineage.py` does is the pattern to reuse.
 - **Column-level lineage** exists for Spark (built-in facet in the listener
   for DataFrame lineage) and dbt (from compiled SQL), not for the manual
   Athena events unless you populate the facet yourself.

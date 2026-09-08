@@ -46,6 +46,23 @@ Parameters:
     Type: String
     Default: deployment/lambda.zip
     Description: S3 key for Lambda deployment package
+  AthenaLineageLambdaS3Key:
+    Type: String
+    Default: deployment/athena_lineage.zip
+    Description: S3 key of the Athena verification / OpenLineage Lambda zip
+  LineageSinkLambdaS3Key:
+    Type: String
+    Default: deployment/lineage_sink.zip
+    Description: S3 key of the OpenLineage capture Lambda zip
+  LineageSinkEnabled:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >-
+      Create a public Function URL that accepts OpenLineage events and logs
+      them to CloudWatch, for verifying the Glue/EMR/Lambda emitters when no
+      Marquez is reachable from AWS. Deploy once with this on, read the
+      LineageSinkUrl output, then redeploy with OpenLineageUrl set to it.
   GlueScriptS3Key:
     Type: String
     Default: deployment/etl_job.py
@@ -120,6 +137,7 @@ Parameters:
 
 Conditions:
   HasOpenLineage: !Not [!Equals [!Ref OpenLineageUrl, ""]]
+  HasLineageSink: !Equals [!Ref LineageSinkEnabled, "true"]
 Resources:
   # ============================================================
   # S3 Buckets
@@ -342,6 +360,9 @@ Resources:
                   - glue:BatchStopJobRun
                 Resource: "*"
               - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${ProjectName}-athena-lineage"
+              - Effect: Allow
                 Action:
                   - events:PutTargets
                   - events:PutRule
@@ -517,6 +538,156 @@ Resources:
           Value: !Ref Environment
         - Key: CostCenter
           Value: !Ref CostCenter
+  AthenaLineageLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-athena-lineage-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AthenaQuery
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - athena:StartQueryExecution
+                  - athena:GetQueryExecution
+                  - athena:GetQueryResults
+                Resource: !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${ProjectName}-${Environment}"
+              - Effect: Allow
+                Action:
+                  - glue:GetDatabase
+                  - glue:GetTable
+                  - glue:GetPartitions
+                  - glue:GetPartition
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                  - s3:GetBucketLocation
+                  - s3:PutObject
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}"
+                  - !Sub "arn:aws:s3:::${ProjectName}-processed-${AWS::AccountId}/*"
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: !Ref CostCenter
+
+  AthenaLineageLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ProjectName}-athena-lineage"
+      Description: Partition row count in Athena + OpenLineage START/COMPLETE events
+      Runtime: python3.12
+      Handler: athena_lineage.lambda_handler
+      Role: !GetAtt AthenaLineageLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key: !Ref AthenaLineageLambdaS3Key
+      Timeout: 180
+      MemorySize: 256
+      Environment:
+        Variables:
+          GLUE_DATABASE: !Ref GlueDatabase
+          PROCESSED_TABLE: processed
+          ATHENA_WORKGROUP: !Ref AthenaWorkGroup
+          OPENLINEAGE_URL: !Ref OpenLineageUrl
+          OPENLINEAGE_NAMESPACE: !Ref ProjectName
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: !Ref CostCenter
+
+  LineageSinkLambda:
+    Type: AWS::Lambda::Function
+    Condition: HasLineageSink
+    Properties:
+      FunctionName: !Sub "${ProjectName}-lineage-sink"
+      Description: OpenLineage capture endpoint - logs RunEvents to CloudWatch
+      Runtime: python3.12
+      Handler: lineage_sink.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucket
+        S3Key: !Ref LineageSinkLambdaS3Key
+      Timeout: 10
+      MemorySize: 128
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: CostCenter
+          Value: !Ref CostCenter
+
+  # Public HTTP endpoint for the sink. An API Gateway HTTP API rather than a
+  # Lambda Function URL: a Function URL with AuthType NONE returned 403 in
+  # this account even with the documented lambda:InvokeFunctionUrl resource
+  # policy (Lambda public-access blocks apply to Function URLs); API Gateway
+  # invokes the function as a service principal and is not subject to that.
+  LineageSinkApi:
+    Type: AWS::ApiGatewayV2::Api
+    Condition: HasLineageSink
+    Properties:
+      Name: !Sub "${ProjectName}-lineage-sink"
+      ProtocolType: HTTP
+      Description: OpenLineage capture endpoint (POST /api/v1/lineage)
+      Tags:
+        Project: !Ref ProjectName
+        Environment: !Ref Environment
+        CostCenter: !Ref CostCenter
+
+  LineageSinkIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Condition: HasLineageSink
+    Properties:
+      ApiId: !Ref LineageSinkApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt LineageSinkLambda.Arn
+      PayloadFormatVersion: "2.0"
+
+  LineageSinkRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Condition: HasLineageSink
+    Properties:
+      ApiId: !Ref LineageSinkApi
+      RouteKey: "POST /api/v1/lineage"
+      Target: !Sub "integrations/${LineageSinkIntegration}"
+
+  LineageSinkStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Condition: HasLineageSink
+    Properties:
+      ApiId: !Ref LineageSinkApi
+      StageName: "$default"
+      AutoDeploy: true
+
+  LineageSinkApiPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasLineageSink
+    Properties:
+      FunctionName: !Ref LineageSinkLambda
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${LineageSinkApi}/*/*/api/v1/lineage"
+
   LambdaInvokePermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -539,7 +710,7 @@ Resources:
           Value: !Ref CostCenter
       DefinitionString: !Sub |
         {
-          "Comment": "Data processing pipeline: encoding check -> crawler (raw table) -> ETL -> crawler (processed table). The crawler is addressed by its fixed name, not !Ref, so the crawler can depend on the landing bucket without closing the bucket->notification->lambda->state-machine cycle.",
+          "Comment": "Data processing pipeline: encoding check -> crawler (raw table) -> ETL -> crawler (processed table) -> Athena partition count with OpenLineage emission. The crawler is addressed by its fixed name, not !Ref, so the crawler can depend on the landing bucket without closing the bucket->notification->lambda->state-machine cycle.",
           "StartAt": "CheckEncoding",
           "States": {
             "CheckEncoding": {
@@ -657,10 +828,39 @@ Resources:
                 {
                   "Variable": "$.recrawlStatus.Crawler.State",
                   "StringEquals": "READY",
-                  "Next": "Done"
+                  "Next": "VerifyInAthena"
                 }
               ],
               "Default": "WaitForRecrawl"
+            },
+            "VerifyInAthena": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ProjectName}-athena-lineage",
+                "Payload": {
+                  "bucket.$": "$.bucket",
+                  "key.$": "$.key",
+                  "execution_name.$": "$$.Execution.Name"
+                }
+              },
+              "ResultSelector": {
+                "rows.$": "$.Payload.rows",
+                "partition.$": "$.Payload.partition",
+                "queryExecutionId.$": "$.Payload.queryExecutionId",
+                "dataScannedInBytes.$": "$.Payload.dataScannedInBytes",
+                "lineage.$": "$.Payload.lineage"
+              },
+              "ResultPath": "$.athena",
+              "Retry": [
+                {
+                  "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+                  "IntervalSeconds": 5,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "Next": "Done"
             },
             "Done": {
               "Type": "Succeed"
@@ -905,6 +1105,13 @@ Resources:
           Value: !Ref CostCenter
 
 Outputs:
+  LineageSinkUrl:
+    Condition: HasLineageSink
+    Description: OpenLineage capture endpoint base URL; set OpenLineageUrl to this on the next deploy
+    Value: !GetAtt LineageSinkApi.ApiEndpoint
+  AthenaLineageLambdaName:
+    Description: Lambda that counts the landed partition in Athena and emits lineage
+    Value: !Ref AthenaLineageLambda
 
   DataLandingBucketName:
     Value: !Ref DataLandingBucket

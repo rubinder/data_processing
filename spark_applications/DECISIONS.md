@@ -375,8 +375,19 @@ leaves every job untouched when unset:
   network; `deploy.sh smoke` posts a synthetic run to prove the endpoint.
 
 Verified: pure config tests in `tests/test_session.py`, compose validation for
-`lineage_deployment`, Marquez smoke event. Not verified: an end-to-end graph
-with all emitters live at once.
+`lineage_deployment`, Marquez smoke event.
+
+**Verified on AWS 2026-09-08.** With an optional capture endpoint in the
+stack (API Gateway + Lambda logging RunEvents; a Lambda Function URL with
+`AuthType: NONE` returned 403 in this account despite the documented
+resource policy), one S3 landing produced Glue events for the ETL's
+`processed` and `quarantine` writes with correct S3 inputs/outputs, the new
+`VerifyInAthena` Lambda emitted START/COMPLETE for the partition count
+(nested under the Step Function run via the parent facet, with SQL and
+bytes-scanned facets), and an EMR step emitted through the listener jar EMR
+7.13 already ships, so the Maven jar is now opt-in. `replay_cloudwatch.py`
+rendered all of it in a local Marquez. Details and the captured graph in
+`lineage_deployment/LINEAGE.md`, "Measured on AWS".
 
 ---
 

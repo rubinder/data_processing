@@ -58,11 +58,15 @@ once per successful aggregation with two independent tasks:
 | `check_freshness` | newest `completed` status file younger than the SLA | `FRESHNESS_SLA_MINUTES` (90) |
 | `check_volume` | this hour's `rows_written` vs the median of the same hour on previous days; quarantine ratio ceiling | `VOLUME_BASELINE_DAYS` (7), `VOLUME_MIN_RATIO` (0.5), `VOLUME_MAX_RATIO` (2.0), `MAX_QUARANTINE_RATIO` (0.01) |
 
-Both read the local storage layout the Spark jobs write (status files and
-raw manifests) under `PIPELINE_DATA_DIR=/opt/airflow/data`, which
-`docker-compose.yaml` bind-mounts from `../data`. In `SPARK_MODE=aws` the
-tasks skip. The pure check functions are in `dags/quality_checks.py` and
-tested without Airflow:
+Storage follows `SPARK_MODE`. In `local` both read the layout the Spark jobs
+write (status files and raw manifests) under `PIPELINE_DATA_DIR=/opt/airflow/data`,
+which `docker-compose.yaml` bind-mounts from `../data`. In `aws` they read the
+DynamoDB status table (`DYNAMODB_TABLE`) and the manifests in the landing
+bucket (`S3_LANDING_BUCKET`), exactly what `AwsStorageAdapter` writes; the
+Airflow image's Amazon provider supplies boto3 and the task role/credentials
+come from the usual chain. The rules themselves are storage-agnostic
+(`freshness_from_records`, `volume_from_manifests`) and tested without
+Airflow, including the AWS reads via botocore stubs:
 
 ```bash
 uv run --no-project --with pytest pytest tests -q

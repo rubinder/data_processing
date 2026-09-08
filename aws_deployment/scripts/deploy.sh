@@ -35,14 +35,18 @@ DEPLOY_PREFIX="deployment"
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TEMP_DIR}"' EXIT
 
-echo "=== Packaging Lambda function ==="
+echo "=== Packaging Lambda functions ==="
 cd "${PROJECT_DIR}/lambda"
-zip -r "${TEMP_DIR}/lambda.zip" trigger_step_function.py
+zip -q "${TEMP_DIR}/lambda.zip" trigger_step_function.py
+zip -q "${TEMP_DIR}/athena_lineage.zip" athena_lineage.py
+zip -q "${TEMP_DIR}/lineage_sink.zip" lineage_sink.py
 cd "${PROJECT_DIR}"
 
 echo "=== Uploading artifacts to S3 ==="
-aws s3 cp "${TEMP_DIR}/lambda.zip" \
-    "s3://${DEPLOYMENT_BUCKET}/${DEPLOY_PREFIX}/lambda.zip"
+for ZIP in lambda.zip athena_lineage.zip lineage_sink.zip; do
+    aws s3 cp "${TEMP_DIR}/${ZIP}" \
+        "s3://${DEPLOYMENT_BUCKET}/${DEPLOY_PREFIX}/${ZIP}"
+done
 
 aws s3 cp "${PROJECT_DIR}/glue/etl_job.py" \
     "s3://${DEPLOYMENT_BUCKET}/${DEPLOY_PREFIX}/etl_job.py"
@@ -90,6 +94,7 @@ uv run python scripts/deploy.py \
     --cost-center "${COST_CENTER}" \
     --openlineage-url "${OPENLINEAGE_URL}" \
     --openlineage-spark-version "${OPENLINEAGE_SPARK_VERSION}" \
-    --emr-bootstrap-key "${EMR_BOOTSTRAP_KEY}"
+    --emr-bootstrap-key "${EMR_BOOTSTRAP_KEY}" \
+    --lineage-sink-enabled "${LINEAGE_SINK_ENABLED:-false}"
 
 echo "=== Deployment complete ==="
