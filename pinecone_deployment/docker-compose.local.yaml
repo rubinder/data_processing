@@ -1,0 +1,4 @@
+networks:
+  data-processing-network:
+    external: false
+    name: pinecone-local-network
