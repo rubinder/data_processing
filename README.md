@@ -45,6 +45,7 @@ forced a rewrite of.
 | [`clickhouse_deployment/`](clickhouse_deployment/) | Distributed ClickHouse: 2 shards + keeper, Distributed over ReplicatedMergeTree |
 | [`iceberg_deployment/`](iceberg_deployment/) | **Apache Iceberg** lakehouse tables on Spark 3.5: field-ID schema evolution, partition evolution, time travel and rollback, MERGE upserts, and compaction/expiry maintenance — 22 tests against real tables |
 | [`duckdb_deployment/`](duckdb_deployment/) | DuckDB as an embedded, application-level OLAP engine behind FastAPI |
+| [`pinecone_deployment/`](pinecone_deployment/) | **Pinecone** similar-conversation retrieval for the AI agent events: namespace vs filter tenant isolation, hybrid search, reranking, exact-kNN recall harness, embedding-model migration; measured on Pinecone Local, 20 tests |
 | [`lineage_deployment/`](lineage_deployment/) | Marquez (OpenLineage backend + UI) and `LINEAGE.md`, the lineage story across Spark, S3, Glue, Athena and dbt |
 | [`web_server_code/`](web_server_code/) | FastAPI service generating the simulated impression data everything else consumes |
 | [`web_server_local/`](web_server_local/), [`web_server_aws/`](web_server_aws/) | Local and AWS deployments of that service |
@@ -52,7 +53,7 @@ forced a rewrite of.
 ## Conventions
 
 - Python 3.10, PEP 8, dependencies managed with `uv`
-- Spark 3.5, Airflow 2.11.1, Flink 1.18.1, Databricks 17.3
+- Spark 3.5, Airflow 2.11.1, Flink 1.18.1, Databricks 17.3, Pinecone SDK 7.x
 - Each module has its own `README.md`, `deploy.sh`, and tests
 - Containers share an external Docker network, `data-processing-network`
 - Lineage is opt-in everywhere through one variable, `OPENLINEAGE_URL`

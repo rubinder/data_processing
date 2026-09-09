@@ -1,0 +1,37 @@
+# Pinecone Local: the emulator Pinecone ships for development. Same data-plane
+# API as the service (indexes, namespaces, upsert/query/fetch/delete, metadata
+# filters) so the tests and the local benchmarks need no account. Not a
+# performance model of serverless: no read/write units, in-memory only, and
+# the control plane assigns one port per index (5081+), hence the port range.
+services:
+  pinecone-local:
+    image: ghcr.io/pinecone-io/pinecone-local:latest
+    container_name: pinecone-local
+    environment:
+      PORT: 5080
+      PINECONE_HOST: localhost
+    ports:
+      - "5080-5090:5080-5090"
+    networks:
+      - data-processing-network
+
+  vector-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vector-api
+    depends_on:
+      - pinecone-local
+    environment:
+      PINECONE_LOCAL_HOST: http://pinecone-local:5080
+      PINECONE_INDEX: conversations
+      EMBEDDER: hash
+    ports:
+      - "8090:8090"
+    networks:
+      - data-processing-network
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network
