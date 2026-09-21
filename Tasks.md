@@ -176,3 +176,15 @@ should ship with a short written narrative of the issue and its resolution
 - [ ] Run `benchmarks/run_local.py` with `PINECONE_API_KEY` set: serverless recall@k (approximate index), hybrid ranking with real sparse scoring, hosted embedder + reranker precision, read/write units per query and batch
 - [ ] Replace the templated transcripts with an LLM-generated corpus (varied phrasings per intent) so intent precision measures the embedder rather than the template bank
 - [ ] Stream new conversations from the realtime_analytics Kafka topic into the index (consumer upserting on `resolution` events)
+
+    - [x] Polars Deployment under polars_deployment (single-node, in-process DataFrame engine; batch counterpart to duckdb_deployment)
+        - [x] Hive-partitioned Parquet store (page_type/date/hour), idempotent per-partition replacement, single scan_parquet with hive pruning
+        - [x] Loader reads the web server csv.gz bytes directly into a typed frame (no gunzip, no row loop)
+        - [x] Four analyses as lazy LazyFrame pipelines sharing the per-impression aggregation; rounding matched to DuckDB/PostgreSQL
+        - [x] CLI: load | query (in-memory or streaming engine, table or json, partition filters) | explain (optimized and raw plans) | partitions
+        - [x] Dockerfile (run-to-completion), docker-compose.yaml (external data-processing-network, data volume), deploy.sh (build|load-data|query|explain|partitions|benchmark|shell|clean)
+        - [x] benchmarks/synth.py deterministic partitions at scale; benchmarks/bench_engines.py eager vs lazy vs streaming vs DuckDB, per-pair subprocess peak RSS, cross-engine verification, results in benchmarks/results
+        - [x] README with the measured writeup (lazy vs eager, streaming negative and positive results, when to replace the Spark job)
+        - [x] uv pyproject.toml, 29 pytest tests (analyses on both engines to the DuckDB fixture numbers, store pruning/projection via explain, mocked loader, CLI)
+        - [ ] Scan the iceberg_deployment tables from Polars (scan_iceberg via pyiceberg) so the same analyses run over the lakehouse copy
+        - [ ] Re-run bench_engines.py at 7 and 30 days to find the scale where the in-memory engine stops fitting on a laptop

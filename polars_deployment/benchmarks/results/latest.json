@@ -1,0 +1,372 @@
+{
+  "generated_at": "2026-09-15T09:30:51",
+  "environment": {
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "cpu_count": 8,
+    "python": "3.10.11",
+    "polars": "1.44.2",
+    "duckdb": "1.5.5"
+  },
+  "dataset": {
+    "files": 144,
+    "partitions": 144,
+    "parquet_bytes": 96961489,
+    "rows": 8161390
+  },
+  "days": 2,
+  "repeat": 3,
+  "variants": [
+    "eager",
+    "lazy",
+    "streaming",
+    "duckdb"
+  ],
+  "results": {
+    "eager": {
+      "funnel": {
+        "variant": "eager",
+        "analysis": "funnel",
+        "times_s": [
+          0.37600408401340246,
+          0.24110383400693536,
+          0.2325105839408934
+        ],
+        "median_s": 0.24110383400693536,
+        "min_s": 0.2325105839408934,
+        "rows": 15,
+        "maxrss_bytes": 1591001088,
+        "rss_after_import_bytes": 50053120
+      },
+      "hourly-traffic": {
+        "variant": "eager",
+        "analysis": "hourly-traffic",
+        "times_s": [
+          0.6988492079544812,
+          0.6938238749280572,
+          0.7510719581041485
+        ],
+        "median_s": 0.6988492079544812,
+        "min_s": 0.6938238749280572,
+        "rows": 144,
+        "maxrss_bytes": 2553430016,
+        "rss_after_import_bytes": 50659328
+      },
+      "page-type-summary": {
+        "variant": "eager",
+        "analysis": "page-type-summary",
+        "times_s": [
+          0.7076420409139246,
+          0.6630612500011921,
+          0.6563199160154909
+        ],
+        "median_s": 0.6630612500011921,
+        "min_s": 0.6563199160154909,
+        "rows": 3,
+        "maxrss_bytes": 2567618560,
+        "rss_after_import_bytes": 50331648
+      },
+      "user-engagement": {
+        "variant": "eager",
+        "analysis": "user-engagement",
+        "times_s": [
+          0.7489951669704169,
+          0.7089713751338422,
+          0.7170061250217259
+        ],
+        "median_s": 0.7170061250217259,
+        "min_s": 0.7089713751338422,
+        "rows": 1200,
+        "maxrss_bytes": 2766323712,
+        "rss_after_import_bytes": 51642368
+      },
+      "hourly-traffic@page_type=1": {
+        "variant": "eager",
+        "analysis": "hourly-traffic@page_type=1",
+        "times_s": [
+          0.24368970794603229,
+          0.22888720803894103,
+          0.22487700008787215
+        ],
+        "median_s": 0.22888720803894103,
+        "min_s": 0.22487700008787215,
+        "rows": 48,
+        "maxrss_bytes": 1219444736,
+        "rss_after_import_bytes": 50315264
+      },
+      "sink-events-d-plus": {
+        "variant": "eager",
+        "analysis": "sink-events-d-plus",
+        "times_s": [
+          0.1613620410207659,
+          0.25970649998635054,
+          0.14787245797924697
+        ],
+        "median_s": 0.1613620410207659,
+        "min_s": 0.14787245797924697,
+        "rows": 6,
+        "maxrss_bytes": 1113243648,
+        "rss_after_import_bytes": 50315264
+      }
+    },
+    "lazy": {
+      "funnel": {
+        "variant": "lazy",
+        "analysis": "funnel",
+        "times_s": [
+          0.22991558397188783,
+          0.2250629998743534,
+          0.21912066591903567
+        ],
+        "median_s": 0.2250629998743534,
+        "min_s": 0.21912066591903567,
+        "rows": 15,
+        "maxrss_bytes": 1405190144,
+        "rss_after_import_bytes": 50937856
+      },
+      "hourly-traffic": {
+        "variant": "lazy",
+        "analysis": "hourly-traffic",
+        "times_s": [
+          0.7112195419613272,
+          0.7236478750128299,
+          0.7252379171550274
+        ],
+        "median_s": 0.7236478750128299,
+        "min_s": 0.7112195419613272,
+        "rows": 144,
+        "maxrss_bytes": 2597060608,
+        "rss_after_import_bytes": 50905088
+      },
+      "page-type-summary": {
+        "variant": "lazy",
+        "analysis": "page-type-summary",
+        "times_s": [
+          0.686703542014584,
+          0.6876479589845985,
+          0.6868941660504788
+        ],
+        "median_s": 0.6868941660504788,
+        "min_s": 0.686703542014584,
+        "rows": 3,
+        "maxrss_bytes": 2593423360,
+        "rss_after_import_bytes": 50053120
+      },
+      "user-engagement": {
+        "variant": "lazy",
+        "analysis": "user-engagement",
+        "times_s": [
+          0.7442379589192569,
+          0.7122117909602821,
+          0.7286971670109779
+        ],
+        "median_s": 0.7286971670109779,
+        "min_s": 0.7122117909602821,
+        "rows": 1200,
+        "maxrss_bytes": 2784346112,
+        "rss_after_import_bytes": 50429952
+      },
+      "hourly-traffic@page_type=1": {
+        "variant": "lazy",
+        "analysis": "hourly-traffic@page_type=1",
+        "times_s": [
+          0.20400537503883243,
+          0.198766625020653,
+          0.20167075004428625
+        ],
+        "median_s": 0.20167075004428625,
+        "min_s": 0.198766625020653,
+        "rows": 48,
+        "maxrss_bytes": 921550848,
+        "rss_after_import_bytes": 50069504
+      },
+      "sink-events-d-plus": {
+        "variant": "lazy",
+        "analysis": "sink-events-d-plus",
+        "times_s": [
+          0.15251095802523196,
+          0.14953883294947445,
+          0.13627175008878112
+        ],
+        "median_s": 0.14953883294947445,
+        "min_s": 0.13627175008878112,
+        "rows": 6,
+        "maxrss_bytes": 644218880,
+        "rss_after_import_bytes": 50053120
+      }
+    },
+    "streaming": {
+      "funnel": {
+        "variant": "streaming",
+        "analysis": "funnel",
+        "times_s": [
+          0.44654295896179974,
+          0.5517537919804454,
+          0.44223029096610844
+        ],
+        "median_s": 0.44654295896179974,
+        "min_s": 0.44223029096610844,
+        "rows": 15,
+        "maxrss_bytes": 2493382656,
+        "rss_after_import_bytes": 50053120
+      },
+      "hourly-traffic": {
+        "variant": "streaming",
+        "analysis": "hourly-traffic",
+        "times_s": [
+          1.5647080831695348,
+          1.3501560830045491,
+          1.487121625104919
+        ],
+        "median_s": 1.487121625104919,
+        "min_s": 1.3501560830045491,
+        "rows": 144,
+        "maxrss_bytes": 3621093376,
+        "rss_after_import_bytes": 50315264
+      },
+      "page-type-summary": {
+        "variant": "streaming",
+        "analysis": "page-type-summary",
+        "times_s": [
+          1.5883290830533952,
+          1.1511011659167707,
+          1.4214336660224944
+        ],
+        "median_s": 1.4214336660224944,
+        "min_s": 1.1511011659167707,
+        "rows": 3,
+        "maxrss_bytes": 3769925632,
+        "rss_after_import_bytes": 50069504
+      },
+      "user-engagement": {
+        "variant": "streaming",
+        "analysis": "user-engagement",
+        "times_s": [
+          1.6751316671725363,
+          1.3240459158550948,
+          1.263262249995023
+        ],
+        "median_s": 1.3240459158550948,
+        "min_s": 1.263262249995023,
+        "rows": 1200,
+        "maxrss_bytes": 3534782464,
+        "rss_after_import_bytes": 51904512
+      },
+      "hourly-traffic@page_type=1": {
+        "variant": "streaming",
+        "analysis": "hourly-traffic@page_type=1",
+        "times_s": [
+          0.28460804210044444,
+          0.26726216706447303,
+          0.2644028749782592
+        ],
+        "median_s": 0.26726216706447303,
+        "min_s": 0.2644028749782592,
+        "rows": 48,
+        "maxrss_bytes": 1435631616,
+        "rss_after_import_bytes": 50053120
+      },
+      "sink-events-d-plus": {
+        "variant": "streaming",
+        "analysis": "sink-events-d-plus",
+        "times_s": [
+          0.14089787495322526,
+          0.13140887510962784,
+          0.1364659999962896
+        ],
+        "median_s": 0.1364659999962896,
+        "min_s": 0.13140887510962784,
+        "rows": 6,
+        "maxrss_bytes": 526467072,
+        "rss_after_import_bytes": 51298304
+      }
+    },
+    "duckdb": {
+      "funnel": {
+        "variant": "duckdb",
+        "analysis": "funnel",
+        "times_s": [
+          0.4082141669932753,
+          0.28511554189026356,
+          0.2988579999655485
+        ],
+        "median_s": 0.2988579999655485,
+        "min_s": 0.28511554189026356,
+        "rows": 15,
+        "maxrss_bytes": 1516765184,
+        "rss_after_import_bytes": 50053120
+      },
+      "hourly-traffic": {
+        "variant": "duckdb",
+        "analysis": "hourly-traffic",
+        "times_s": [
+          0.7795969999860972,
+          0.7522139579523355,
+          0.7540120410267264
+        ],
+        "median_s": 0.7540120410267264,
+        "min_s": 0.7522139579523355,
+        "rows": 144,
+        "maxrss_bytes": 2803695616,
+        "rss_after_import_bytes": 51429376
+      },
+      "page-type-summary": {
+        "variant": "duckdb",
+        "analysis": "page-type-summary",
+        "times_s": [
+          0.8209561668336391,
+          0.7689777091145515,
+          0.7716620420105755
+        ],
+        "median_s": 0.7716620420105755,
+        "min_s": 0.7689777091145515,
+        "rows": 3,
+        "maxrss_bytes": 2832121856,
+        "rss_after_import_bytes": 50364416
+      },
+      "user-engagement": {
+        "variant": "duckdb",
+        "analysis": "user-engagement",
+        "times_s": [
+          0.9025057081598788,
+          0.9336924999952316,
+          0.9448697918560356
+        ],
+        "median_s": 0.9336924999952316,
+        "min_s": 0.9025057081598788,
+        "rows": 1200,
+        "maxrss_bytes": 3057106944,
+        "rss_after_import_bytes": 51281920
+      },
+      "hourly-traffic@page_type=1": {
+        "variant": "duckdb",
+        "analysis": "hourly-traffic@page_type=1",
+        "times_s": [
+          0.2603312497958541,
+          0.22790633304975927,
+          0.23303625010885298
+        ],
+        "median_s": 0.23303625010885298,
+        "min_s": 0.22790633304975927,
+        "rows": 48,
+        "maxrss_bytes": 1265876992,
+        "rss_after_import_bytes": 50380800
+      },
+      "sink-events-d-plus": {
+        "variant": "duckdb",
+        "analysis": "sink-events-d-plus",
+        "times_s": [
+          0.21771508385427296,
+          0.20628420799039304,
+          0.22434395807795227
+        ],
+        "median_s": 0.21771508385427296,
+        "min_s": 0.20628420799039304,
+        "rows": 6,
+        "maxrss_bytes": 1068957696,
+        "rss_after_import_bytes": 50053120
+      }
+    }
+  },
+  "verification_problems": []
+}

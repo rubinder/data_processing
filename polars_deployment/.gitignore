@@ -1,0 +1,4 @@
+# Local Parquet store written by `load` and the benchmark's synthetic dataset
+data/
+benchmarks/data/
+benchmarks/results/_frames/
