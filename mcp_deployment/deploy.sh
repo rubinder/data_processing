@@ -23,7 +23,8 @@ INGESTION_PASSWORD, TRANSFORM_PASSWORD, PROMOTION_PASSWORD, MCP_READER_PASSWORD.
   ask <question> Search the catalog from the command line
   demo           apply -> promote -> sync -> search -> run a template -> rollback, printed
   bench-embed    Compare the hashing and sentence-transformers embedders on benchmarks/questions.yaml
-  bench-scale    Load, sync, search and execute at 20 / 100 / 500 / 2000 synthetic templates
+  bench-scale    Load, sync, search and execute at 20 / 100 / 500 / 2000 / 10000 synthetic templates
+  bench-load     Concurrent callers against the service, pooled vs a connection per call
 USAGE
     exit 1
 }
@@ -46,5 +47,6 @@ case "${1:-}" in
     demo)         run mcp_deployment.demo ;;
     bench-embed)  uv run --extra test --extra semantic python benchmarks/compare_embedders.py ;;
     bench-scale)  uv run --extra test python benchmarks/bench_scale.py "${@:2}" ;;
+    bench-load)   uv run --extra test python benchmarks/bench_concurrency.py "${@:2}" ;;
     *)            usage ;;
 esac
