@@ -1,0 +1,37 @@
+[project]
+name = "ops-agent"
+version = "0.1.0"
+description = "Contracts-driven, rules-first ops agent over the Iceberg impression tables"
+requires-python = ">=3.10"
+dependencies = [
+    # The tables the agent watches are the ones iceberg_deployment creates;
+    # the Spark session and the impressions DDL come from there so the two
+    # modules cannot drift apart on catalog config or column names.
+    "iceberg-deployment",
+    "pyarrow>=16.0.0",
+    "pyyaml>=6.0",
+    "langgraph>=0.2.0",
+]
+
+[project.optional-dependencies]
+# DuckDB is test-only: it runs the same monitor SQL the Spark engine runs, so
+# a query that works on one and not the other fails in the fast suite.
+test = ["pytest>=8.0.0", "duckdb>=1.1.0"]
+# Only needed if ANTHROPIC_API_KEY is set; the classifier is rules-first and
+# never calls a model in tests.
+llm = ["anthropic>=0.40.0"]
+
+[tool.uv.sources]
+iceberg-deployment = { path = "../iceberg_deployment", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ops_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["spark: needs a JVM; runs against real Iceberg tables"]

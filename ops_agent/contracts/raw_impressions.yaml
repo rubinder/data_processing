@@ -1,0 +1,28 @@
+table: db.impressions
+version: 1
+owner: data-platform
+# Declares every column db.impressions has, in Iceberg's type vocabulary,
+# because that is what the engine's schema history reports. A column left
+# undeclared here is flagged `added` on every run -- correctly classified
+# additive, but exactly the noise the additive/breaking split exists to avoid.
+schema:
+  - {name: user_id, type: string, nullable: false}
+  - {name: impression_id, type: string, nullable: false}
+  - {name: page_type, type: int, nullable: false}
+  - {name: event_ts, type: timestamptz, nullable: false}
+  - {name: event_type, type: string, nullable: false}
+expectations:
+  - {type: not_null, column: impression_id}
+  # A fail-closed gate, not a watch: the funnel models and the partition
+  # layout branch on page_type, so an unregistered value is a build error.
+  - {type: accepted_values, column: page_type, values: [1, 2, 3]}
+  - {type: row_count, min: 1}
+  - {type: freshness, column: event_ts, max_lag_days: 1}
+
+# Categorical columns watched for NEW values. Deliberately separate from
+# `expectations`: an upstream producer adding an event stage breaks nothing
+# today, but a funnel that groups on this column now has a bucket nobody
+# declared. Recorded and reported, never blocking.
+enum_watch:
+  - column: event_type
+    known_values: [a, b, c, d, e, f]

@@ -1,0 +1,109 @@
+# The impression event feed: the event model every module in this repository
+# reads, landed append-only in db.impressions (created by iceberg_deployment)
+# and rolled up per impression in db.impressions_aggregated.
+#
+# Everything about this feed except its Iceberg DDL lives here. Adding a feed
+# is one new file in this directory and zero Python edits.
+name: impressions
+domain: web_analytics
+feed_type: event
+owner: data-platform
+ingest:
+  mode: batch
+
+layers:
+  raw:
+    table: db.impressions
+    contract: raw_impressions.yaml
+    # The column the ops agent reads for freshness. Named here so the agent
+    # has no per-feed knowledge at all.
+    freshness_column: event_ts
+    # The agent senses this layer: schema drift, enum drift, volume, staleness.
+    agent_watch: true
+  aggregated:
+    table: db.impressions_aggregated
+    contract: aggregated_impressions.yaml
+    # Generate a column-type monitor per contract field on this layer.
+    typed: true
+
+monitors:
+  # The raw table is append-only, which is exactly the case where cumulative
+  # count(*) is the WRONG volume signal: five batches of 1,000 rows followed
+  # by a batch of 1 still reads "5001 vs baseline 3000". `source:
+  # snapshot_added` reads the rows added by the latest non-rebuild snapshot
+  # instead -- the size of the batch that just landed. `query` documents the
+  # shape only; it is not executed for this monitor.
+  - name: raw_impressions_row_count
+    layer: raw
+    kind: row_count
+    severity: breaking
+    source: snapshot_added
+    params: {breach_ratio: 0.5, warn_ratio: 0.8}
+    query: >
+      -- not executed: metric = added_records of the latest non-rebuild snapshot
+
+  - name: raw_impressions_null_impression_id_rate
+    layer: raw
+    kind: null_rate
+    column: impression_id
+    severity: breaking
+    params: {max_absolute: 0}
+    # CAST AS DOUBLE: Spark types this ratio DECIMAL(38,16) and DuckDB DOUBLE;
+    # the cast makes the metric the same number on both engines.
+    query: >
+      SELECT CAST(sum(CASE WHEN impression_id IS NULL THEN 1 ELSE 0 END) * 1.0
+             / nullif(count(*), 0) AS DOUBLE) AS metric FROM t
+
+  # The aggregated table is fully rebuilt on every run, so count(*) over the
+  # live table is the number that matters and per-snapshot added-records
+  # would read every rebuild as a spike.
+  - name: aggregated_row_count
+    layer: aggregated
+    kind: row_count
+    severity: breaking
+    params: {breach_ratio: 0.5, warn_ratio: 0.8}
+    query: SELECT count(*) AS metric FROM t
+
+  - name: aggregated_duplicate_impressions
+    layer: aggregated
+    kind: duplicate_rate
+    column: impression_id
+    severity: breaking
+    params: {max_absolute: 0}
+    query: SELECT count(*) - count(DISTINCT impression_id) AS metric FROM t
+
+  - name: aggregated_mean_funnel_depth
+    layer: aggregated
+    kind: distribution_shift
+    column: funnel_depth
+    severity: additive
+    params: {breach_z: 4.0, warn_z: 3.0}
+    query: SELECT avg(funnel_depth) AS metric FROM t
+
+  - name: aggregated_user_cardinality
+    layer: aggregated
+    kind: cardinality
+    column: user_id
+    severity: additive
+    params: {breach_ratio: 0.5, warn_ratio: 0.8}
+    query: SELECT count(DISTINCT user_id) AS metric FROM t
+
+  - name: aggregated_page_type_3_share
+    layer: aggregated
+    kind: distribution_shift
+    column: page_type
+    severity: additive
+    params: {breach_z: 4.0, warn_z: 3.0}
+    query: >
+      SELECT CAST(sum(CASE WHEN page_type = 3 THEN 1 ELSE 0 END) * 1.0
+             / nullif(count(*), 0) AS DOUBLE) AS metric FROM t
+
+arrival:
+  # One impression per row is a structure, but impressions per day is a
+  # volume that varies with the seed size, so no honest floor exists and
+  # none is asserted. Thinness is what the volume monitors above measure.
+  - layer: aggregated
+    column: event_date
+    calendar: daily
+    max_lag_periods: 1
+    min_rows_per_period: null

@@ -188,3 +188,28 @@ should ship with a short written narrative of the issue and its resolution
         - [x] uv pyproject.toml, 29 pytest tests (analyses on both engines to the DuckDB fixture numbers, store pruning/projection via explain, mocked loader, CLI)
         - [ ] Scan the iceberg_deployment tables from Polars (scan_iceberg via pyiceberg) so the same analyses run over the lakehouse copy
         - [ ] Re-run bench_engines.py at 7 and 30 days to find the scale where the in-memory engine stops fitting on a laptop
+
+## Ops Agent (added 2026-09-22, ported from ~/IdeaProjects/autonomous_data_platform)
+The unique pieces of that repo -- YAML data contracts, a rules-first LangGraph
+ops agent, feed-declared monitors and arrival SLAs, and the daily report --
+folded in as one module over the Iceberg impression tables in
+`iceberg_deployment/`. The duplicated lakehouse and quality code was not
+brought over; the forecast was dropped as off-theme.
+    - [x] `ops_agent/` module: Spark engine over the `iceberg_deployment` catalog (schema history with field IDs, per-snapshot row counts, Arrow scans), `feeds/*.yaml` + `contracts/*.yaml`, monitors with persisted baselines, arrival SLAs, throttled alerts, LangGraph sense -> monitor -> classify -> persist -> act agent, incidents, daily report with day-over-day diff
+    - [x] A second Iceberg table `db.impressions_aggregated` rebuilt from `db.impressions` so the module has both an append-only layer (per-snapshot volume) and a fully rebuilt layer (`count(*)` volume, column-type checks)
+    - [x] Drift demo: evolve the schema (add / rename / widen) and inject a collapsed batch with an unregistered event_type; the agent classifies the rename by field ID as `renaming`, not a drop plus an add
+    - [x] Tests: 67 pure-Python rules tests against a DuckDB-backed fake engine plus 5 Spark integration tests against real Iceberg tables (72 passing); the two engines caught a real dialect difference (Spark types a ratio DECIMAL(38,16), DuckDB DOUBLE)
+    - [x] README with the recorded demo output (2026-09-22); Planning.md and root README updated
+
+## Governed agent-access layer (added 2026-09-22)
+Neither this repo nor autonomous_data_platform had the layer that makes a
+dataset "AI-ready" in the agentic sense: a catalog the agent searches, a fixed
+set of approved query templates, and an MCP server that can run only those.
+    - [x] RBAC: least-privilege Postgres roles per stage on the dbt deployment (ingestion, transform, promotion, MCP read-only); the agent role can see gold only
+    - [x] Blue-green promotion into a `gold` schema with a release log and a tested rollback, done by one `SECURITY DEFINER` function the promotion role can call
+    - [x] Semantic catalog: pgvector table of every gold table, column and query template, generated from the dbt manifest, synced by content hash
+    - [x] Query templates: pre-approved, parameterized SQL with typed parameters, row caps and timeouts; no raw SQL path exists
+    - [x] MCP server (FastMCP, mcp 1.x) with five read-only tools over the read-only role; verified end to end against Postgres in Docker (pgvector/pgvector:pg15 image) and driven over stdio by a raw JSON-RPC client (2026-09-22)
+    - [x] Tests: 26 unit (template lint + binding, catalog entries + ranking, service + MCP tool listing/calls) and 8 PostgreSQL (least-privilege roles, promotion, rollback, retention, incremental pgvector sync + search, capped/timed execution, every template with NULL optionals) -- 34 passing
+    - [x] README with the recorded demo transcript, Planning.md and root README updated; dbt_deployment's Postgres image switched to pgvector/pgvector:pg15
+    - [ ] Measure catalog search and template latency at scale (500 templates, catalog beyond memory); run with CATALOG_EMBEDDER=sentence-transformers and compare ranking against the hashing embedder on a held-out question set
