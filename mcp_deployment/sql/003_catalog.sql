@@ -24,6 +24,10 @@ CREATE INDEX IF NOT EXISTS entries_embedding_hnsw
     ON catalog.entries USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS entries_kind ON catalog.entries (kind);
 
+-- transform owns the table so a sync can ANALYZE it: after a bulk load the
+-- planner's stale row estimate makes the kind filter look selective and it
+-- picks the btree on kind plus a sort over the HNSW index.
+ALTER TABLE catalog.entries OWNER TO transform;
 GRANT USAGE ON SCHEMA catalog TO mcp_reader, transform;
 GRANT SELECT ON catalog.entries TO mcp_reader;
 GRANT SELECT, INSERT, UPDATE, DELETE ON catalog.entries TO transform;

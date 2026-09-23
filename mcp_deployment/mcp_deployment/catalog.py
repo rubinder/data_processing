@@ -147,14 +147,28 @@ def sync(conn, entries: list[Entry], embedder: Embedder) -> SyncResult:
         if gone:
             conn.execute("DELETE FROM catalog.entries WHERE entry_id = ANY(%s)", (gone,))
     conn.commit()
+    if to_embed or gone:
+        # Fresh statistics, or the planner keeps sequential-scanning a table
+        # it still believes is forty rows (measured: 22 ms at 10k rows).
+        conn.execute("ANALYZE catalog.entries")
+        conn.commit()
     return SyncResult(inserted, updated, len(gone), len(entries) - len(to_embed), embedder.model)
 
 
 def search(conn, query: str, embedder: Embedder, kinds: tuple[str, ...] | None = None,
            limit: int = 10) -> list[dict]:
     """Nearest entries by cosine distance, through pgvector."""
+    import psycopg
+
     q = vector_literal(embedder.embed([query])[0])
     kind_filter = "AND kind = ANY(%(kinds)s)" if kinds else ""
+    # pgvector >= 0.8: keep walking the HNSW graph until LIMIT rows pass the
+    # kind filter, instead of stopping at ef_search candidates and returning
+    # fewer. Older pgvector has no such setting; the query still works.
+    try:
+        conn.execute("SELECT set_config('hnsw.iterative_scan', 'relaxed_order', false)")
+    except psycopg.errors.UndefinedObject:
+        conn.rollback()
     rows = conn.execute(
         f"""SELECT entry_id, kind, name, table_name, description,
                    1 - (embedding <=> %(q)s::vector) AS score
