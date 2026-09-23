@@ -30,3 +30,6 @@ iceberg-warehouse/
 # graphify generated cache
 graphify-out/cache/
 graphify-out/.graphify_python
+
+# Model caches (sentence-transformers via HF_HOME)
+.cache/

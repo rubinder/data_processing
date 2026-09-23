@@ -22,9 +22,15 @@ INGESTION_PASSWORD, TRANSFORM_PASSWORD, PROMOTION_PASSWORD, MCP_READER_PASSWORD.
   serve          Run the MCP server on stdio as mcp_reader (point your MCP client here)
   ask <question> Search the catalog from the command line
   demo           apply -> promote -> sync -> search -> run a template -> rollback, printed
+  bench-embed    Compare the hashing and sentence-transformers embedders on benchmarks/questions.yaml
+  bench-scale    Load, sync, search and execute at 20 / 100 / 500 / 2000 synthetic templates
 USAGE
     exit 1
 }
+
+# The optional sentence-transformers embedder caches its model under HF_HOME;
+# keep it inside the module (gitignored) rather than in the user's home.
+export HF_HOME="${HF_HOME:-$SCRIPT_DIR/.cache/hf}"
 
 run() { uv run --extra test python -m "$@"; }
 
@@ -38,5 +44,7 @@ case "${1:-}" in
     serve)        uv run python -m mcp_deployment.server ;;
     ask)          run mcp_deployment.demo ask "${@:2}" ;;
     demo)         run mcp_deployment.demo ;;
+    bench-embed)  uv run --extra test --extra semantic python benchmarks/compare_embedders.py ;;
+    bench-scale)  uv run --extra test python benchmarks/bench_scale.py "${@:2}" ;;
     *)            usage ;;
 esac

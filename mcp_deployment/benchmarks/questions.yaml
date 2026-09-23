@@ -1,0 +1,60 @@
+# A fixed question set for the embedder comparison. Each question names the
+# catalog entry a good search should rank first. `paraphrase: true` marks
+# questions that share no significant word with the target's text -- the
+# case a lexical embedder cannot get right by construction.
+- q: conversion rate from the previous funnel stage for page type 2
+  expect: template:funnel_by_page_type
+- q: what is the drop-off between stages
+  expect: template:funnel_by_page_type
+  paraphrase: true
+- q: how far down the funnel do visitors get on page 1
+  expect: template:funnel_by_page_type
+  paraphrase: true
+- q: headline numbers per page type
+  expect: template:page_type_summary
+- q: which page type converts best
+  expect: template:page_type_summary
+  paraphrase: true
+- q: how engaged are users on each page type
+  expect: template:page_type_summary
+- q: who are the most engaged users
+  expect: template:top_engaged_users
+- q: top 20 power users by activity
+  expect: template:top_engaged_users
+  paraphrase: true
+- q: which users have the deepest funnels
+  expect: template:top_engaged_users
+- q: impression volume by hour for a date range
+  expect: template:hourly_traffic
+- q: busiest hours of the day last week
+  expect: template:hourly_traffic
+  paraphrase: true
+- q: traffic by hour last week
+  expect: template:hourly_traffic
+- q: is the conversion rate for page type 1 going up or down
+  expect: template:daily_conversion_trend
+- q: week over week trend in conversions
+  expect: template:daily_conversion_trend
+  paraphrase: true
+- q: day by day share reaching stage d
+  expect: template:daily_conversion_trend
+- q: table with funnel conversion analysis by page type
+  expect: table:funnel_analysis
+- q: hourly traffic patterns table
+  expect: table:hourly_traffic
+- q: user level engagement metrics table
+  expect: table:user_engagement
+- q: summary statistics per page type
+  expect: table:page_type_summary
+- q: average session duration in seconds
+  expect: column:page_type_summary.avg_duration_seconds
+- q: how long do sessions last
+  expect: column:page_type_summary.avg_duration_seconds
+  paraphrase: true
+- q: when was each user first seen
+  expect: column:user_engagement.first_seen
+- q: percentage of impressions reaching stage f
+  expect: column:page_type_summary.pct_reaching_f
+- q: number of distinct users per hour
+  expect: column:hourly_traffic.unique_users
+  paraphrase: true

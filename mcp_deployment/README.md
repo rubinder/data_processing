@@ -16,6 +16,7 @@ running the `pgvector/pgvector:pg15` image.
 ./deploy.sh demo     # apply roles + gold + catalog, promote, sync, search, run, prove denials, roll back
 ./deploy.sh test     # 26 unit tests always; 8 PostgreSQL tests when the database is reachable
 ./deploy.sh serve    # the MCP server on stdio, as mcp_reader
+./deploy.sh bench-embed && ./deploy.sh bench-scale   # the measurements below
 ```
 
 ---
@@ -231,10 +232,73 @@ claude mcp add gold -- uv run python -m mcp_deployment.server
 Then ask a question. The agent's first call is `gold_search_catalog`, its last
 is `gold_run_template`; there is nothing else it can do here.
 
-## Scale, honestly
+## Measured (2026-09-23)
 
-This is toy-sized: four gold tables, ~50 catalog entries, five templates. The
-shapes that matter at scale are already in place — the catalog is a table with
-an HNSW index (pgvector handles millions of rows), sync is incremental by hash,
-templates are files under review, and the server is stateless per call — but
-nothing here has been measured under load.
+Two questions an interviewer asks after the demo: does the cheap embedder
+actually find things, and what happens at 500 templates instead of 5.
+
+### Hashing embedder vs sentence-transformers
+
+`./deploy.sh bench-embed` ranks the real catalog (45 entries) in memory
+against [`benchmarks/questions.yaml`](benchmarks/questions.yaml): 24
+questions, each labelled with the entry a good search ranks first, 8 of them
+paraphrases that share no significant word with the target's text.
+
+| Embedder | hit@1 | hit@3 | MRR | hit@1 within kind | paraphrase hit@1 | paraphrase hit@3 | paraphrase MRR | query embed p50 | max |
+|---|---|---|---|---|---|---|---|---|---|
+| `hash-v1-384` | 46% | 58% | 0.56 | 79% | 38% | 50% | 0.48 | 0.0 ms | 0.0 ms |
+| `sentence-transformers/all-MiniLM-L6-v2` | 58% | 83% | 0.73 | 92% | 88% | 88% | 0.90 | 5.9 ms | 16.9 ms |
+
+- **Paraphrases are where the hashing embedder fails, by construction**: 38 %
+  at rank 1 against 88 % for MiniLM. "how long do sessions last" ranks the
+  right column 24th of 45 by hash and 5th by MiniLM.
+- **Unfiltered hit@1 is low for both, and for the same reason**: a column of
+  the right table outranks its table or template entry. Searching within a
+  kind, which is the call an agent actually makes, lifts rank-1 accuracy to
+  79 % (hash) and 92 % (MiniLM). The catalog's mistake is mostly about entry
+  granularity, not about which table it found.
+- **Cost**: MiniLM embeds a query in ~6 ms on this CPU and costs ~1.7 s to
+  embed 540 entries at sync time; the hashing embedder is free. The catalog
+  table does not change between them (both are 384 dims), so switching is
+  `CATALOG_EMBEDDER=sentence-transformers` and one sync.
+
+Full misses per embedder are in
+[`benchmarks/results/embedders.md`](benchmarks/results/embedders.md).
+
+### 500 templates instead of 5
+
+`./deploy.sh bench-scale` generates synthetic-but-valid templates into a
+temp directory, loads them through the lint, syncs them into pgvector,
+then measures search (50 queries, as `mcp_reader`) and template execution.
+Hashing embedder, HNSW cosine index, PostgreSQL 15 in Docker on a laptop.
+
+| templates | catalog rows | load + lint | first sync (embed + write) | no-op re-sync | search p50 | search p95 | planner uses HNSW | search p50, index forced | execute p50 | execute p95 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 20 | 60 | 13 ms | 44 ms | 1 ms | 0.5 ms | 0.6 ms | no | 0.5 ms | 0.6 ms | 0.8 ms |
+| 100 | 140 | 63 ms | 96 ms | 1 ms | 0.6 ms | 0.7 ms | no | 0.6 ms | 0.6 ms | 0.8 ms |
+| 500 | 540 | 307 ms | 540 ms | 2 ms | 1.6 ms | 1.8 ms | no | 1.9 ms | 0.8 ms | 1.5 ms |
+| 2000 | 2040 | 1251 ms | 2160 ms | 4 ms | 4.7 ms | 5.6 ms | no | 4.5 ms | 0.6 ms | 1.1 ms |
+| 10000 | 10040 | 6269 ms | 13008 ms | 24 ms | 0.7 ms | 0.9 ms | yes | 0.6 ms | 0.6 ms | 0.7 ms |
+
+- **Load and lint are linear and cheap**: ~0.6 ms per template. 500
+  templates cost 0.3 s at server start.
+- **Sync is linear in what changed, not in what exists**: a no-op re-sync
+  of 10,040 rows is 24 ms because every hash matches. Only edited templates
+  are re-embedded.
+- **The planner ignores the HNSW index until the table is big enough to
+  make it worth it**, and that is correct: at 2,000 rows a sequential scan
+  is 4.6 ms. The first run of this benchmark showed 22 ms at 10,000 rows
+  with the planner *still* sequential-scanning, because the bulk insert had
+  left statistics stale and the `kind` filter looked selective. The fix is
+  in the code now: `sync()` runs `ANALYZE` after a change (the `transform`
+  role owns the table for that reason), and `search()` sets pgvector's
+  `hnsw.iterative_scan = relaxed_order` so a filtered query keeps walking
+  the graph instead of returning short. With that, 10,000 templates search
+  in 0.7 ms.
+- **Execution does not move**: template latency is the query's, not the
+  catalog's.
+
+What was not measured: concurrent load on the MCP server (it opens a
+connection per call; a pool is the obvious next step), and a catalog beyond
+one machine's memory, which pgvector on a single PostgreSQL handles into the
+millions of rows before that question is real.
