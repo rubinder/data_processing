@@ -7,6 +7,8 @@ deliberately no method that accepts SQL.
 """
 from __future__ import annotations
 
+import os
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -98,31 +100,58 @@ class GoldService:
                            for p in t.params]}
 
 
-def postgres_service(template_dir=None, embedder: Embedder | None = None) -> GoldService:
-    """A service bound to the reader role. Every call opens its own short
-    connection; the server is stateless between calls."""
+def postgres_service(template_dir=None, embedder: Embedder | None = None,
+                     pool_size: int | None = None) -> GoldService:
+    """A service bound to the reader role.
+
+    Connections come from a pool sized by ``pool_size`` (default
+    ``MCP_POOL_SIZE`` or 8). A pool of 0 opens a fresh connection per call,
+    which is what the server did before ``benchmarks/bench_concurrency.py``
+    measured the cost of the handshake under concurrent load.
+    """
     loaded = templates.load_templates(template_dir)
     embedder = embedder or get_embedder()
     reader = config.role_db("mcp_reader")
+    size = int(os.environ.get("MCP_POOL_SIZE", "8")) if pool_size is None else pool_size
+
+    if size > 0:
+        from psycopg_pool import ConnectionPool
+
+        pool = ConnectionPool(reader.dsn, min_size=1, max_size=size, open=True,
+                              kwargs={"autocommit": False})
+
+        @contextmanager
+        def connection():
+            with pool.connection() as conn:
+                yield conn
+    else:
+        pool = None
+
+        @contextmanager
+        def connection():
+            with db.connect(reader) as conn:
+                yield conn
 
     def search_fn(query, kinds, limit):
-        with db.connect(reader) as conn:
+        with connection() as conn:
             return catalog.search(conn, query, embedder, kinds, limit)
 
     def execute_fn(template, params):
-        with db.connect(reader) as conn:
+        with connection() as conn:
             return templates.execute(conn, template, params)
 
     def columns_fn(table):
-        with db.connect(reader) as conn:
+        with connection() as conn:
             return catalog.columns_of(conn, table)
 
     def release_fn():
         from mcp_deployment import promotion
-        with db.connect(reader) as conn:
+        with connection() as conn:
             found = promotion.active_release(conn)
         if found:
             found["promoted_at"] = found["promoted_at"].isoformat()
         return found
 
-    return GoldService(loaded, search_fn, execute_fn, columns_fn, release_fn, embedder.model)
+    service = GoldService(loaded, search_fn, execute_fn, columns_fn, release_fn, embedder.model)
+    service.extra["pool"] = pool
+    return service

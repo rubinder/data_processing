@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Governed agent access to the gold layer: RBAC, blue-green promotion, a pgvector catalog and an MCP server that runs only approved templates"
 requires-python = ">=3.10"
 dependencies = [
-    "psycopg[binary]>=3.1.0",
+    "psycopg[binary,pool]>=3.1.0",
     "pyyaml>=6.0",
     # 1.x: the FastMCP API. 2.x renamed it to MCPServer and changed call shapes.
     "mcp>=1.10.0,<2",

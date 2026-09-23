@@ -16,7 +16,7 @@ running the `pgvector/pgvector:pg15` image.
 ./deploy.sh demo     # apply roles + gold + catalog, promote, sync, search, run, prove denials, roll back
 ./deploy.sh test     # 26 unit tests always; 8 PostgreSQL tests when the database is reachable
 ./deploy.sh serve    # the MCP server on stdio, as mcp_reader
-./deploy.sh bench-embed && ./deploy.sh bench-scale   # the measurements below
+./deploy.sh bench-embed && ./deploy.sh bench-scale && ./deploy.sh bench-load   # the measurements below
 ```
 
 ---
@@ -298,7 +298,34 @@ Hashing embedder, HNSW cosine index, PostgreSQL 15 in Docker on a laptop.
 - **Execution does not move**: template latency is the query's, not the
   catalog's.
 
-What was not measured: concurrent load on the MCP server (it opens a
-connection per call; a pool is the obvious next step), and a catalog beyond
-one machine's memory, which pgvector on a single PostgreSQL handles into the
-millions of rows before that question is real.
+### Concurrent callers
+
+`./deploy.sh bench-load` drives the service layer from 1, 8 and 32 threads
+with a mix of catalog searches and template runs, as `mcp_reader`, with and
+without a connection pool. 400 calls per cell.
+
+| mode | concurrent callers | calls/s | p50 | p95 | max |
+|---|---|---|---|---|---|
+| connection per call | 1 | 188 | 5.2 ms | 6.6 ms | 20.0 ms |
+| connection per call | 8 | 491 | 15.7 ms | 23.9 ms | 42.0 ms |
+| connection per call | 32 | 595 | 49.9 ms | 76.5 ms | 134.9 ms |
+| pool of 8 | 1 | 1586 | 0.6 ms | 0.8 ms | 7.9 ms |
+| pool of 8 | 8 | 3639 | 2.1 ms | 3.2 ms | 5.0 ms |
+| pool of 8 | 32 | 3569 | 8.4 ms | 11.6 ms | 13.1 ms |
+| pool of 32 | 1 | 1730 | 0.5 ms | 0.7 ms | 8.5 ms |
+| pool of 32 | 8 | 3621 | 2.1 ms | 3.5 ms | 4.5 ms |
+| pool of 32 | 32 | 2908 | 10.5 ms | 13.9 ms | 22.1 ms |
+
+- **The handshake was the cost.** A fresh connection per call is ~5 ms of
+  the 5.2 ms a single caller pays; pooled, the same call is 0.6 ms.
+- **A pool of 8 is the right size for this box.** At 8 callers it gives
+  7x the throughput and a p95 of 3 ms against 24 ms unpooled. A pool of 32
+  is no faster and slightly worse at 32 callers: the laptop, not the pool,
+  is the limit.
+- The server now pools by default (`MCP_POOL_SIZE`, default 8;
+  `0` restores a connection per call, which is how the number above was
+  measured).
+
+Not measured: a catalog beyond one machine's memory, which pgvector on a
+single PostgreSQL handles into the millions of rows before that question is
+real.
