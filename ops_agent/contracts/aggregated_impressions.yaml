@@ -1,0 +1,21 @@
+table: db.impressions_aggregated
+version: 1
+owner: data-platform
+schema:
+  - {name: impression_id, type: string, nullable: false}
+  - {name: user_id, type: string, nullable: false}
+  - {name: page_type, type: int, nullable: false}
+  - {name: event_date, type: date, nullable: false}
+  - {name: funnel_depth, type: int, nullable: false}
+  - {name: max_event_type, type: string, nullable: false}
+  - {name: first_event_ts, type: timestamptz, nullable: false}
+  - {name: last_event_ts, type: timestamptz, nullable: false}
+expectations:
+  - {type: not_null, column: impression_id}
+  - {type: unique, column: impression_id}
+  - {type: accepted_values, column: page_type, values: [1, 2, 3]}
+  # Six funnel stages, a to f. Depth 0 cannot exist (a row is an impression
+  # that happened); depth 7 means an unregistered stage reached the rollup.
+  - {type: range, column: funnel_depth, min: 1, max: 6}
+  - {type: freshness, column: event_date, max_lag_days: 1}
+  - {type: row_count, min: 1}

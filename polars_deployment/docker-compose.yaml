@@ -1,0 +1,22 @@
+services:
+  polars-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: polars-deployment:latest
+    container_name: polars-app
+    environment:
+      POLARS_DATA_DIR: /data/impressions
+      API_BASE_URL: ${API_BASE_URL:-http://web-server:8000}
+    volumes:
+      - polars-data:/data
+    networks:
+      - data-processing-network
+
+volumes:
+  polars-data:
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network
