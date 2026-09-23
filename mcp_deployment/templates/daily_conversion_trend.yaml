@@ -1,0 +1,37 @@
+name: daily_conversion_trend
+description: >
+  Day-by-day conversion trend per page type, rolled up from the hourly table:
+  impressions per day and the share that reached stage d. Answers "is the
+  conversion rate for page type 1 going up or down over the last week".
+tags: [conversion, trend, daily, page_type, time_series]
+params:
+  - name: page_type
+    type: int
+    description: The page type, 1, 2 or 3
+    choices: [1, 2, 3]
+  - name: days
+    type: int
+    description: How many most-recent days to include, 1 to 90
+    default: 7
+    min: 1
+    max: 90
+returns: [event_date, page_type, total_impressions, impressions_reaching_d, pct_reaching_d]
+max_rows: 90
+timeout_ms: 5000
+sql: |
+  WITH daily AS (
+      SELECT event_date, page_type,
+             sum(total_impressions)      AS total_impressions,
+             sum(impressions_reaching_d) AS impressions_reaching_d
+      FROM gold.hourly_traffic
+      WHERE page_type = %(page_type)s
+      GROUP BY event_date, page_type
+  ),
+  recent AS (
+      SELECT * FROM daily ORDER BY event_date DESC LIMIT %(days)s
+  )
+  SELECT event_date, page_type, total_impressions, impressions_reaching_d,
+         round(impressions_reaching_d::numeric / nullif(total_impressions, 0) * 100, 2)
+             AS pct_reaching_d
+  FROM recent
+  ORDER BY event_date

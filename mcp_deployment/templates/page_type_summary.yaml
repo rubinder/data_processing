@@ -1,0 +1,22 @@
+name: page_type_summary
+description: >
+  Headline numbers per page type: total impressions, unique users, average and
+  maximum funnel depth, average session duration in seconds, and the count and
+  percentage of impressions reaching stages d, e and f. Answers "which page
+  type converts best" and "how engaged are users on each page type".
+tags: [summary, engagement, page_type, overview]
+params:
+  - name: page_type
+    type: int
+    description: Restrict to one page type (1, 2 or 3); NULL means every page type
+    required: false
+    choices: [1, 2, 3]
+returns: [page_type, total_impressions, unique_users, avg_funnel_depth, max_funnel_depth, avg_duration_seconds, impressions_reaching_d, impressions_reaching_e, impressions_reaching_f, pct_reaching_d, pct_reaching_e, pct_reaching_f]
+max_rows: 10
+timeout_ms: 2000
+sql: |
+  SELECT *
+  FROM gold.page_type_summary
+  -- ::int so PostgreSQL can type the parameter when it arrives as NULL
+  WHERE %(page_type)s::int IS NULL OR page_type = %(page_type)s::int
+  ORDER BY page_type

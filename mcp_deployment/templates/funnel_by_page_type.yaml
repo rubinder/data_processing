@@ -1,0 +1,21 @@
+name: funnel_by_page_type
+description: >
+  Funnel conversion for one page type: how many impressions reached each event
+  stage (a through f), the share of all impressions at that stage, and the
+  conversion rate from the previous stage. Answers "what is the drop-off
+  between stages for page type N" and "what percent of page type 3 reaches f".
+tags: [funnel, conversion, page_type]
+params:
+  - name: page_type
+    type: int
+    description: The page type, 1, 2 or 3
+    choices: [1, 2, 3]
+returns: [page_type, event_type, impressions_at_stage, total_impressions, pct_of_total, pct_from_previous_stage]
+max_rows: 10
+timeout_ms: 2000
+sql: |
+  SELECT page_type, event_type, impressions_at_stage, total_impressions,
+         pct_of_total, pct_from_previous_stage
+  FROM gold.funnel_analysis
+  WHERE page_type = %(page_type)s
+  ORDER BY event_type

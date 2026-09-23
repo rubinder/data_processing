@@ -1,0 +1,30 @@
+name: top_engaged_users
+description: >
+  The most engaged users ranked by total impressions, with page types visited,
+  average and maximum funnel depth, total events, first and last seen, and the
+  page type each user engages with most. Answers "who are the top N users" and
+  "which users have the deepest funnels".
+tags: [users, engagement, ranking]
+params:
+  - name: limit
+    type: int
+    description: How many users to return, 1 to 500
+    default: 20
+    min: 1
+    max: 500
+  - name: min_impressions
+    type: int
+    description: Only users with at least this many impressions
+    default: 1
+    min: 1
+returns: [user_id, total_impressions, page_types_visited, avg_funnel_depth, max_funnel_depth, total_events, first_seen, last_seen, most_engaged_page_type, impressions_on_top_page]
+max_rows: 500
+timeout_ms: 5000
+sql: |
+  SELECT user_id, total_impressions, page_types_visited, avg_funnel_depth,
+         max_funnel_depth, total_events, first_seen, last_seen,
+         most_engaged_page_type, impressions_on_top_page
+  FROM gold.user_engagement
+  WHERE total_impressions >= %(min_impressions)s
+  ORDER BY total_impressions DESC, user_id
+  LIMIT %(limit)s

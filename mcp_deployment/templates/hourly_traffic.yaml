@@ -1,0 +1,29 @@
+name: hourly_traffic
+description: >
+  Impression volume and engagement by hour for a date range: impressions,
+  unique users, average funnel depth, and how many and what share reached
+  stage d, per page type. Answers "what were the peak hours on a date" and
+  "how did traffic for page type 2 vary over the week".
+tags: [traffic, hourly, time_series, page_type]
+params:
+  - name: start_date
+    type: date
+    description: First date of the range, YYYY-MM-DD, inclusive
+  - name: end_date
+    type: date
+    description: Last date of the range, YYYY-MM-DD, inclusive
+  - name: page_type
+    type: int
+    description: Restrict to one page type (1, 2 or 3); NULL means every page type
+    required: false
+    choices: [1, 2, 3]
+returns: [event_date, hour, page_type, total_impressions, unique_users, avg_funnel_depth, impressions_reaching_d, pct_reaching_d]
+max_rows: 2000
+timeout_ms: 5000
+sql: |
+  SELECT event_date, hour, page_type, total_impressions, unique_users,
+         avg_funnel_depth, impressions_reaching_d, pct_reaching_d
+  FROM gold.hourly_traffic
+  WHERE event_date BETWEEN %(start_date)s AND %(end_date)s
+    AND (%(page_type)s::int IS NULL OR page_type = %(page_type)s::int)
+  ORDER BY event_date, hour, page_type

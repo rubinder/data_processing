@@ -1,7 +1,9 @@
 
 services:
   dbt-postgres:
-    image: postgres:15
+    # pgvector build of PostgreSQL 15: same server, plus the vector type the
+    # semantic catalog in ../mcp_deployment needs. Drop-in for the data volume.
+    image: pgvector/pgvector:pg15
     container_name: dbt-postgres
     environment:
       POSTGRES_USER: dbt
