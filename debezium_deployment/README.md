@@ -4,6 +4,40 @@ Change Data Capture (CDC) pipeline using Debezium to stream PostgreSQL changes i
 
 ## Architecture
 
+The CDC stack: a logical-replication Postgres, Debezium Connect with the Avro converter, Kafka, a BACKWARD-compatible Schema Registry, and the Flink consumer.
+
+```mermaid
+flowchart LR
+    subgraph module["debezium_deployment"]
+        pg[("debezium-postgres<br/>wal_level=logical<br/>impressions.events, users, pull_status")]
+        init["init_db.sql<br/>schema + seed rows"]
+        changes["sample_changes.sql<br/>schema_changes.sql"]
+        connect["debezium-connect 2.5<br/>Confluent Avro converter"]
+        cfg["connectors/postgres-source.json"]
+        zk["debezium-zookeeper"]
+        kafka(["debezium-kafka<br/>topics per table"])
+        registry["debezium-schema-registry<br/>BACKWARD per subject"]
+        ui["debezium-kafka-ui<br/>localhost:8090"]
+        deploy["deploy.sh<br/>register, topics, consume, evolve, evolve-incompatible"]
+    end
+    flink["flink_deployment<br/>cdc_impressions.py"]
+    init --> pg
+    changes -->|"DML, ALTER TABLE"| pg
+    deploy -->|"register"| connect
+    cfg --> connect
+    pg -->|"WAL"| connect
+    connect -->|"Avro"| kafka
+    connect -->|"subjects v1..v4"| registry
+    zk --- kafka
+    kafka --> ui
+    kafka -->|"avro-confluent"| flink
+    registry --> flink
+```
+
+- `SCHEMA_EVOLUTION.md` is the measured walkthrough of ADD / RENAME / DROP travelling from `ALTER TABLE` through the registry's compatibility gate to Flink's reader schema; `evolve-incompatible` shows the 409.
+- `docker-compose.local.yaml` runs the stack without the shared network.
+
+
 ```
 PostgreSQL (source) → Debezium Connect → Kafka → Kafka UI (monitoring)
 ```

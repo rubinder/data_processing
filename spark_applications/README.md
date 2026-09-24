@@ -2,6 +2,53 @@
 
 PySpark data processing jobs that run across local, AWS, and Databricks environments.
 
+## Architecture
+
+The two production jobs, their shared utilities, and the three storage modes they run against.
+
+```mermaid
+flowchart LR
+    api{{"web_server_code<br/>GET /impression csv.gz"}}
+    subgraph jobs["spark_applications"]
+        pull["api_pull.py<br/>fetch with retry, land, write"]
+        landing["utils/landing.py<br/>stage, write, promote, _manifest.json"]
+        quality["utils/quality.py<br/>quarantine, reconcile, volume"]
+        schema["utils/schema.py<br/>explicit StructType"]
+        session["utils/session.py<br/>AQE, skew join, OpenLineage listener"]
+        agg["aggregation.py<br/>partition-pruned read, broadcast or salted join"]
+        salt["salted_join.py"]
+        debug["debugging/<br/>seven cases, explain_tools.py"]
+    end
+    subgraph storage["Storage by SPARK_MODE"]
+        local[("local parquet")]
+        s3[("S3 + Athena<br/>aws_deployment")]
+        dbfs[("DBFS delta<br/>databricks_deployment")]
+        status[("pull status<br/>table, DynamoDB, or delta")]
+    end
+    quarantine[("quarantine path")]
+    marquez["lineage_deployment"]
+    api -->|"csv.gz"| pull
+    pull --> schema
+    pull --> quality
+    pull --> landing
+    quality --> quarantine
+    landing --> local
+    landing --> s3
+    landing --> dbfs
+    pull --> status
+    local --> agg
+    s3 --> agg
+    dbfs --> agg
+    agg --> salt
+    session --> pull
+    session --> agg
+    debug -.->|"same data"| local
+    session -.->|"OpenLineage"| marquez
+```
+
+- One code path, three modes: the storage adapter is chosen by `SPARK_MODE` and every adapter has the same stage / write / promote / manifest primitives.
+- `DECISIONS.md` and `DEBUGGING.md` record the measured before/after for each utility; the dashed lineage edge is gated on `OPENLINEAGE_URL`.
+
 ## Applications
 
 - **hello_world.py** - Simple hello world Spark job that creates a DataFrame and prints a total count. Used for validating Spark connectivity.

@@ -18,6 +18,50 @@ Everything here is verified by **22 tests that run against real Iceberg tables**
 ./deploy.sh up       # REST catalog + MinIO, the production-shaped deployment
 ```
 
+## Architecture
+
+Spark 3.5 with the Iceberg extensions over one of two catalogs, and the five modules that demonstrate the table format.
+
+```mermaid
+flowchart LR
+    subgraph module["iceberg_deployment"]
+        session["session.py<br/>get_spark_session, Iceberg SQL extensions"]
+        table[("db.impressions<br/>days(event_ts), page_type<br/>format v2, merge-on-read")]
+        imp["impressions.py<br/>DDL, sample_rows, seed, rows_to_df"]
+        evo["schema_evolution.py<br/>add, rename, drop, widen, partition spec"]
+        tt["time_travel.py<br/>snapshots, VERSION AS OF, rollback, cherrypick"]
+        up["upserts.py<br/>MERGE INTO from the live schema"]
+        maint["maintenance.py<br/>rewrite_data_files, expire_snapshots, remove_orphan_files"]
+        demo["demo.py<br/>six-step walkthrough"]
+        tests[["tests<br/>22 on real tables, hadoop catalog"]]
+        deploy["deploy.sh<br/>up, demo, test"]
+    end
+    subgraph catalogs["Catalogs, chosen by ICEBERG_CATALOG_TYPE"]
+        hadoop[("hadoop<br/>local filesystem warehouse")]
+        rest["iceberg-rest<br/>tabulario/iceberg-rest, 8181"]
+        minio[("iceberg-minio<br/>S3 API, console 9101")]
+    end
+    ops["ops_agent<br/>watches db.impressions"]
+    deploy --> demo
+    deploy --> tests
+    session --> hadoop
+    session --> rest --> minio
+    imp --> table
+    demo --> imp
+    demo --> evo
+    demo --> tt
+    demo --> up
+    demo --> maint
+    evo --> table
+    tt --> table
+    up --> table
+    maint --> table
+    tests --> session
+    table --> ops
+```
+
+- The filesystem catalog needs no services and is what the tests use; the REST catalog on MinIO is the production shape because it owns commit atomicity on object storage.
+
 ---
 
 ## Why a table format at all

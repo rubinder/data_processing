@@ -28,6 +28,119 @@ forced a rewrite of.
 
 ---
 
+## Featured: governed agent access to the gold layer
+
+**[`mcp_deployment/`](mcp_deployment/) — an MCP server that lets an LLM agent
+find what exists in the gold datamart and run a pre-approved, parameterized
+query against it, and structurally nothing else: the server has no tool that
+accepts SQL, and the PostgreSQL role it connects as can `SELECT` gold and the
+catalog only. Underneath: least-privilege roles per pipeline stage, a
+blue-green promotion into `gold` done by one `SECURITY DEFINER` function with a
+release log and a tested rollback, and a pgvector catalog of every gold table,
+column and template generated from the dbt manifest.**
+
+Measured rather than asserted: the hashing embedder finds the right template
+38 % of the time on paraphrased questions against 88 % for MiniLM; a catalog of
+10,000 templates searches in 0.7 ms once the planner uses the HNSW index, and
+the first run showed why it did not; a connection pool takes the server from
+491 to 3,639 calls per second at eight concurrent callers. Verified end to end
+against PostgreSQL in Docker, and driven over stdio by a raw JSON-RPC client,
+which found the one bug the tests had not.
+
+→ **[Read the writeup](mcp_deployment/README.md)** ·
+**[The measurements](mcp_deployment/README.md#measured-2026-09-23)**
+
+---
+
+## Featured: a contracts-driven ops agent over Iceberg
+
+**[`ops_agent/`](ops_agent/) — a rules-first LangGraph agent that watches the
+Iceberg impression tables against YAML data contracts: schema drift, enum
+drift, volume collapse, staleness, monitor breaches and arrival gaps. It reads
+Iceberg metadata, not data, and pairs renames by field ID, so a renamed column
+is one `renaming` finding rather than a phantom drop plus a phantom add.
+Findings are persisted, actionable ones become incident files, and a daily
+report diffs the platform day over day without recomputing a number.**
+
+The recorded demo evolves the schema three ways and lands a collapsed batch
+carrying an unregistered event stage; the agent classifies the seven findings
+it raises as `widening`, `renaming`, `additive`, `enum_drift` and three
+`breaking`, and the report explains each. 72 tests, five of them on real
+Iceberg tables; the two-engine test design caught a Spark-versus-DuckDB
+decimal difference before it reached production.
+
+→ **[Read the writeup](ops_agent/README.md)** ·
+**[The demo, as it ran](ops_agent/README.md#the-demo-as-it-ran-2026-09-22)**
+
+---
+
+## Architecture
+
+One simulated impression event source feeds most of the modules; each pulls or
+generates its own copy and deploys on its own. A second event model, AI-agent
+conversation events, drives the real-time path on the right.
+
+```mermaid
+flowchart LR
+    subgraph source["web_server_code"]
+        api["FastAPI /impression<br/>csv.gz per page_type, date, hour"]
+    end
+
+    subgraph batch["Batch"]
+        spark["spark_applications<br/>api_pull, aggregation"]
+        airflow["airflow_deployment<br/>hourly DAG"]
+        aws["aws_deployment<br/>S3, Glue, Athena, EMR"]
+        dbx["databricks_deployment"]
+        dbt["dbt_deployment<br/>PostgreSQL + dbt"]
+        duck["duckdb_deployment"]
+        polars["polars_deployment"]
+        ch["clickhouse_deployment<br/>2 shards + keeper"]
+    end
+
+    subgraph lakehouse["Lakehouse"]
+        iceberg["iceberg_deployment<br/>Spark 3.5 + Iceberg"]
+        ops["ops_agent<br/>contracts + LangGraph"]
+    end
+
+    subgraph cdc["CDC + streaming"]
+        dbz["debezium_deployment<br/>Postgres, Kafka, Schema Registry"]
+        flink["flink_deployment<br/>cdc_impressions job"]
+    end
+
+    subgraph gold["Governed access"]
+        mcp["mcp_deployment<br/>roles, gold, pgvector, MCP"]
+    end
+
+    subgraph conv["AI-agent conversation events"]
+        rt["realtime_analytics<br/>Kafka, PyFlink, ClickHouse, API"]
+        pine["pinecone_deployment<br/>similar-conversation retrieval"]
+    end
+
+    lineage["lineage_deployment<br/>Marquez"]
+
+    api -->|"csv.gz"| spark
+    api -->|"csv.gz"| dbt
+    api -->|"csv.gz"| duck
+    api -->|"csv.gz"| polars
+    api -->|"csv.gz"| ch
+    airflow --> spark
+    spark --> aws
+    spark --> dbx
+    dbt -->|"public_analytics"| mcp
+    iceberg -->|"db.impressions"| ops
+    dbz -->|"Avro topics"| flink
+    rt --> pine
+    spark -.->|"OpenLineage"| lineage
+    airflow -.->|"OpenLineage"| lineage
+    dbt -.->|"OpenLineage"| lineage
+    aws -.->|"OpenLineage"| lineage
+```
+
+- Iceberg and the Debezium source database generate their own copies of the
+  same impression model rather than pulling from the API.
+- Dashed edges are opt-in and gated on one variable, `OPENLINEAGE_URL`.
+- Every module in the table below has its own `## Architecture` diagram.
+
 ## Modules
 
 | Directory | What it is |

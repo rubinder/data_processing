@@ -11,6 +11,47 @@ The service ingests impression data from the web server API (the same
 four analytical models from `dbt_deployment` as JSON endpoints, re-implemented
 in standard DuckDB SQL.
 
+## Architecture
+
+A FastAPI service with DuckDB embedded in-process: one load endpoint from the web server, four analysis endpoints over the result.
+
+```mermaid
+flowchart LR
+    api{{"web_server_code<br/>GET /impression csv.gz"}}
+    subgraph module["duckdb_deployment"]
+        app["duckdb-app<br/>FastAPI main.py, port 8000"]
+        loader["app/loader.py<br/>csv.gz to DuckDB"]
+        db["app/db.py<br/>in-process DuckDB connection"]
+        file[("impressions.duckdb<br/>duckdb-data volume")]
+        queries["app/queries.py<br/>four analyses"]
+        load["POST /load"]
+        e1["GET /funnel"]
+        e2["GET /page-type-summary"]
+        e3["GET /user-engagement"]
+        e4["GET /hourly-traffic"]
+        health["GET /health"]
+        tests[["tests<br/>real DuckDB via TestClient, 11"]]
+        deploy["deploy.sh<br/>up, load-data, query"]
+    end
+    deploy --> app
+    app --> load --> loader
+    api -->|"csv.gz"| loader
+    loader --> db --> file
+    app --> e1
+    app --> e2
+    app --> e3
+    app --> e4
+    app --> health
+    e1 --> queries
+    e2 --> queries
+    e3 --> queries
+    e4 --> queries
+    queries --> db
+    tests -.-> app
+```
+
+- The analyses are the same four as the dbt models and the ClickHouse and Polars modules, so results can be compared across engines.
+
 ## The embedded pattern
 
 - `app/db.py` — opens a file-backed (or `:memory:`) DuckDB connection and

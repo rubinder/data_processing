@@ -13,6 +13,53 @@ machinery actually buy anything over "read it all, then compute"? The
 [benchmark](#benchmark-one-machine-four-strategies) below measures that, and
 its answer is not uniformly in Polars' favour.
 
+## Architecture
+
+How one `load` pulls a partition from the web server into the Parquet store, and how `query`, `explain` and the benchmark scan it.
+
+```mermaid
+flowchart LR
+    subgraph ws["web_server_local"]
+        api["web-server container<br/>GET /impression"]
+    end
+    subgraph module["polars_deployment"]
+        cli["cli.py<br/>load, query, explain, partitions"]
+        loader["loader.py<br/>read_csv on gzip bytes"]
+        schema["schema.py<br/>Int8 columns, hive layout"]
+        store[("store.py ParquetStore<br/>page_type=N/date=D/hour=H/data.parquet")]
+        analyses["analyses.py<br/>funnel, page-type-summary,<br/>user-engagement, hourly-traffic"]
+        mem["in-memory engine<br/>collect"]
+        stream["streaming engine<br/>collect engine=streaming"]
+        synth["benchmarks/synth.py<br/>deterministic synthetic partitions"]
+        benchdata[("benchmarks/data<br/>144 partition files")]
+        bench["benchmarks/bench_engines.py<br/>eager vs lazy vs streaming vs duckdb"]
+        results[("benchmarks/results<br/>latest.json, latest.md")]
+        tests[["tests/<br/>29 pytest"]]
+    end
+    subgraph duck["duckdb_deployment"]
+        queries["app/queries.py<br/>SQL for the duckdb variant"]
+    end
+    api -->|"csv.gz"| loader
+    cli -->|"load"| loader
+    loader -->|"write_partition"| store
+    schema -.->|"SCHEMA"| loader
+    schema -.->|"HIVE_SCHEMA"| store
+    cli -->|"query, explain"| analyses
+    store -->|"scan_parquet"| analyses
+    analyses -->|"LazyFrame"| mem
+    analyses -->|"LazyFrame"| stream
+    synth -->|"ParquetStore"| benchdata
+    benchdata -->|"scan or read_parquet"| bench
+    analyses -.->|"lazy plan"| bench
+    queries -.->|"read_parquet SQL"| bench
+    bench -->|"verified medians"| results
+    tests -.->|"both engines"| analyses
+```
+
+- In Docker the store is the `polars-data` volume at `/data/impressions`; `API_BASE_URL` defaults to `http://web-server:8000` on the shared `data-processing-network`.
+- `bench_engines.py` runs every strategy and workload pair in its own subprocess, and the `duckdb` variant is skipped when `duckdb_deployment` or the package is missing.
+- `explain` prints the optimized plan the same `scan_parquet` feeds to both engines; nothing is read until `collect`.
+
 ## The single-node pattern
 
 - `polars_deployment/schema.py` - the impression schema with the integer

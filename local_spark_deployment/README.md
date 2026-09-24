@@ -4,6 +4,40 @@ Deploys a local Apache Spark 3.5 cluster using Docker with a master and worker n
 
 ## Architecture
 
+A two-container Spark standalone cluster that Airflow submits to and that reads the web server over the shared network.
+
+```mermaid
+flowchart LR
+    subgraph module["local_spark_deployment"]
+        master["spark-master<br/>7077, UI 8081"]
+        worker["spark-worker"]
+        compose["docker-compose.yaml<br/>docker-compose.local.yaml"]
+        deploy["deploy.sh<br/>up, down, status, logs"]
+    end
+    subgraph code["spark_applications, mounted"]
+        api_pull["api_pull.py<br/>SPARK_MODE=local"]
+        agg["aggregation.py"]
+        out[("local parquet<br/>page_type/date/hour")]
+    end
+    airflow["airflow_deployment<br/>hello_world_local_spark, impression_pipeline"]
+    webserver["web_server_local<br/>http://web-server:8000"]
+    net["data-processing-network"]
+    deploy --> compose --> master
+    compose --> worker
+    worker -->|"registers"| master
+    airflow -->|"spark-submit"| master
+    master --> api_pull
+    master --> agg
+    api_pull -->|"csv.gz"| webserver
+    api_pull --> out
+    out --> agg
+    master --- net
+    webserver --- net
+```
+
+- `docker-compose.local.yaml` runs the cluster standalone when Airflow is not up; the shared network is what lets Airflow's containers resolve `spark-master`.
+
+
 - **Dockerfile**: Builds on the official `spark:3.5.7-scala2.12-java17-ubuntu` image with Python 3 pip installed.
 - **docker-compose.yaml**: Runs two services:
   - `spark-master` - Spark master node (port 7077 for Spark, port 8081 for web UI)
