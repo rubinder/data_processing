@@ -40,6 +40,42 @@ Flink Web UI is available at [http://localhost:8082](http://localhost:8082) when
 
 ## Architecture
 
+A JobManager and TaskManager built with PyFlink 1.18.1 and the Kafka and Avro registry jars, running the CDC consumer from flink_applications.
+
+```mermaid
+flowchart LR
+    subgraph module["flink_deployment"]
+        jm["flink-jobmanager<br/>UI localhost:8082"]
+        tm["flink-taskmanager"]
+        img["Dockerfile<br/>Flink 1.18.1, PyFlink, Kafka + Avro jars"]
+        deploy["deploy.sh<br/>up, down, submit, logs"]
+    end
+    subgraph apps["flink_applications"]
+        hello["hello_world.py<br/>batch Table API"]
+        cdc["cdc_impressions.py<br/>cdc_sql.py source and sink DDL"]
+        window["tumbling window counts<br/>per page_type, event time, watermarks"]
+    end
+    subgraph cdcstack["debezium_deployment"]
+        topic(["Kafka topic<br/>impressions.events, Avro"])
+        registry["Schema Registry"]
+    end
+    sink(["upsert-kafka topic<br/>keyed by page_type, window"])
+    img --> jm
+    img --> tm
+    tm -->|"registers"| jm
+    deploy -->|"submit"| jm
+    jm --> hello
+    jm --> cdc
+    topic -->|"avro-confluent"| cdc
+    registry --> cdc
+    cdc --> window
+    window -->|"exactly-once checkpoints"| sink
+```
+
+- The job stayed RUNNING across source schema versions 1 to 4 (recorded in `../debezium_deployment/SCHEMA_EVOLUTION.md`); fields dropped upstream arrive as NULL, not as failures.
+- `docker-compose.local.yaml` starts the cluster standalone.
+
+
 - **JobManager**: Coordinates job execution, exposed on port 8082 (Web UI)
 - **TaskManager**: Executes tasks, configured with 2 task slots and 1728m memory
 - Application code from `../flink_applications/flink_applications` is mounted at `/opt/flink-apps`

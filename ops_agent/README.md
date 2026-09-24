@@ -18,6 +18,56 @@ jobs, dbt models, DuckDB, ClickHouse and Polars modules all read.
 ./deploy.sh agent    # run the agent against ./iceberg-warehouse (add --execute to file GitHub issues)
 ```
 
+## Architecture
+
+From declared contracts and Iceberg metadata to findings, incidents and a daily report, through one LangGraph graph.
+
+```mermaid
+flowchart LR
+    subgraph config["Declared"]
+        feed["feeds/impressions.yaml<br/>layers, monitors, arrival SLA"]
+        contracts["contracts/*.yaml<br/>schema, expectations, enum_watch"]
+    end
+    subgraph lake["iceberg_deployment catalog"]
+        raw[("db.impressions<br/>append-only")]
+        aggt[("db.impressions_aggregated<br/>rebuilt, contract-gated")]
+        opst[("ops.monitor_results, alert_log,<br/>finding_log, agent_runs")]
+    end
+    subgraph module["ops_agent"]
+        engine["engine.py SparkEngine<br/>schema history with field IDs,<br/>snapshot summaries, projected scans"]
+        lakehouse["lakehouse.py<br/>seed, build_aggregated"]
+        sense["sense<br/>sensors.observe + detect"]
+        monitor["monitor<br/>runner + arrival, breaches only"]
+        classify["classify<br/>rules first"]
+        persist["persist"]
+        act["act<br/>incidents, dry-run gh issue"]
+        report["report.py<br/>reads ops.*, diffs day over day"]
+        alerts["alerts.py<br/>throttled via ops.alert_log"]
+    end
+    llm{{"Anthropic API<br/>only if no rule matches"}}
+    gh{{"GitHub issues<br/>only with --execute"}}
+    inc[("incidents/*.md<br/>stable slugs")]
+    rep[("reports/daily-DATE.md")]
+    feed --> sense
+    contracts --> sense
+    contracts --> lakehouse
+    lakehouse --> raw
+    lakehouse --> aggt
+    raw --> engine
+    aggt --> engine
+    engine --> sense --> monitor --> classify --> persist --> act
+    monitor --> alerts
+    persist --> opst
+    alerts --> opst
+    opst --> report --> rep
+    act --> inc
+    classify -.-> llm
+    act -.-> gh
+```
+
+- The sensor reads metadata, not data: columns, field IDs and per-snapshot row counts come from the Iceberg table, and one projected scan covers the freshness column and watched enums.
+- Dashed edges never fire in tests: the LLM needs `ANTHROPIC_API_KEY`, the issue needs `--execute`.
+
 ---
 
 ## What "agentic ops" means here

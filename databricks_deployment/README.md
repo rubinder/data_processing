@@ -4,6 +4,36 @@ Deploys Spark application workflows to a Databricks workspace.
 
 ## Architecture
 
+How the workflow definition reaches a Databricks workspace and what its tasks run.
+
+```mermaid
+flowchart LR
+    subgraph module["databricks_deployment"]
+        wf["workflow.json<br/>tasks hello_world, api_pull, aggregation"]
+        deploy["deploy.sh<br/>Databricks CLI, .env credentials"]
+    end
+    subgraph dbx["Databricks workspace"]
+        job{{"Workflow job<br/>job cluster, Databricks 17.3"}}
+        t1["hello_world"]
+        t2["api_pull<br/>SPARK_MODE=databricks"]
+        t3["aggregation"]
+        delta[("DBFS delta tables<br/>impressions, pull status")]
+    end
+    code["spark_applications<br/>uploaded as a package"]
+    api{{"web server API"}}
+    deploy -->|"jobs create"| job
+    wf --> deploy
+    code --> job
+    job --> t1
+    job --> t2 --> t3
+    t2 -->|"csv.gz"| api
+    t2 --> delta
+    delta --> t3
+```
+
+- Same Spark jobs as the local and AWS paths; only the storage adapter (delta on DBFS) and the pull-status table change.
+
+
 - **workflow.json**: Defines a multi-task Databricks workflow (`data_processing_workflow`) with three tasks:
   1. `api_pull` - Pulls impression data from the API and saves to a Delta table
   2. `aggregation` - Aggregates impression data by user_id, impression_id, page_type (depends on `api_pull`)

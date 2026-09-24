@@ -8,6 +8,56 @@ workgroup, Glue DPU-hours, EMR Spot/scaling) and how to measure them are in
 
 ## Architecture
 
+The CloudFormation stacks: an event-driven Step Function from S3 landing to Athena, and a separate per-job EMR stack.
+
+```mermaid
+flowchart LR
+    subgraph core["main.yaml stack data-processing-pipeline"]
+        landing[("S3 landing bucket")]
+        trigger["Lambda<br/>trigger_step_function.py"]
+        sfn["Step Function"]
+        enc["CheckEncoding<br/>AWS Batch, batch/check_encoding.py"]
+        crawl["RunGlueCrawler<br/>WaitForCrawler"]
+        etl["GlueETL<br/>glue/etl_job.py, zstd parquet"]
+        recrawl["Recrawl"]
+        verify["VerifyInAthena<br/>lambda/athena_lineage.py"]
+        processed[("S3 processed bucket<br/>page_type/date/hour")]
+        catalog[("Glue Database<br/>impressions, processed")]
+        athena{{"Athena workgroup<br/>bytes-scanned cutoff"}}
+        ddb[("DynamoDB<br/>pull status")]
+        sink["Lambda lineage_sink.py<br/>API Gateway, optional"]
+    end
+    subgraph emrstack["emr.yaml stack, created per job"]
+        emr{{"EMR 7.13<br/>Spot task group, managed scaling"}}
+    end
+    subgraph tools["scripts/"]
+        deploy["deploy.sh + deploy.py<br/>zip, upload, create stacks"]
+        emrsh["emr.sh up, status, down"]
+    end
+    spark["spark_applications<br/>api_pull, aggregation"]
+    marquez["lineage_deployment<br/>replay_cloudwatch.py"]
+    landing -->|"S3 event"| trigger --> sfn
+    sfn --> enc --> crawl --> etl --> recrawl --> verify
+    etl --> processed
+    crawl --> catalog
+    recrawl --> catalog
+    verify --> athena
+    processed --> athena
+    spark -->|"raw csv.gz + manifest"| landing
+    spark --> ddb
+    emr --> spark
+    deploy --> core
+    emrsh --> emrstack
+    etl -.->|"OpenLineage"| sink
+    emr -.->|"OpenLineage"| sink
+    verify -.->|"OpenLineage"| sink
+    sink -.->|"CloudWatch"| marquez
+```
+
+- The core stack idles at about zero cost; the EMR stack exists only while a job runs (`scripts/emr.sh up` / `down`).
+- Dashed edges are lineage, gated on `OPENLINEAGE_URL` and the `LineageSinkEnabled` parameter; `FINOPS.md` has the cost narrative.
+
+
 The CloudFormation template (`cloudformation/main.yaml`) provisions:
 
 - **S3 Buckets**: Landing bucket (incoming data) and processed data bucket (parquet output), both with public access blocked, SSE-S3, optional versioning and lifecycle rules (see below)

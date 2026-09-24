@@ -2,6 +2,49 @@
 
 FastAPI web server that generates and serves simulated impression data as gzip-compressed CSV files.
 
+## Architecture
+
+The endpoint, the generator behind it, the csv.gz it returns, and the repo modules that fetch it.
+
+```mermaid
+flowchart LR
+    subgraph deploy["deployments"]
+        local["web_server_local<br/>docker compose, web-server:8000"]
+        aws["web_server_aws<br/>ECS Fargate behind an ALB"]
+    end
+    subgraph module["web_server_code"]
+        main["main.py<br/>FastAPI app Impression Data Server"]
+        ep["GET /impression<br/>page_type 1-3, date YYYY-MM-DD, hour 0-23"]
+        gen["generator.py<br/>generate_gzip_csv"]
+        funnel["FUNNEL_RATES<br/>event_type a-f per page_type"]
+        ids["uuid4 user_id<br/>uuid5 impression_id"]
+        out[("impressions_ptN_DATE_hH.csv.gz<br/>user_id, impression_id, page_type,<br/>date, hour, min, second, event_type")]
+        tests[["tests/<br/>test_main.py, test_generator.py"]]
+    end
+    subgraph consumers["consumers of GET /impression"]
+        dbt["dbt_deployment<br/>load_data.py"]
+        duck["duckdb_deployment<br/>app/loader.py"]
+        polars["polars_deployment<br/>loader.py"]
+        spark["spark_applications<br/>api_pull.py"]
+    end
+    local -->|"uvicorn"| main
+    aws -->|"same image"| main
+    main --> ep
+    ep -->|"page_type, date, hour"| gen
+    funnel -.->|"funnel depth"| gen
+    ids -.->|"deterministic ids"| gen
+    gen -->|"gzip.compress"| out
+    out -->|"application/gzip"| dbt
+    out -->|"application/gzip"| duck
+    out -->|"application/gzip"| polars
+    out -->|"application/gzip"| spark
+    tests -.->|"TestClient"| main
+```
+
+- Every impression rolls one random number against `FUNNEL_RATES[page_type]`, so `event_type` `f` only appears when `a` through `e` did; page type 1 never reaches `e`.
+- `impression_id` is `uuid5` of `user_id:page_type:date:hour:minute`, so the same user in the same minute never gets two impressions.
+- Consumers issue the GET themselves; `airflow_deployment` and `clickhouse_deployment` fetch the same endpoint and are omitted for space.
+
 ## API
 
 ### `GET /impression`

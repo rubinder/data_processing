@@ -90,6 +90,50 @@ rows whether the table holds 12 million events or 12 billion.
 
 ## Architecture
 
+One conversation-event stream, three routes into ClickHouse, one API reading only materialized views.
+
+```mermaid
+flowchart LR
+    subgraph gen["Event source, simulated"]
+        producer["producer.py<br/>keyed by conversation_id, late events injected"]
+    end
+    subgraph module["realtime_analytics"]
+        kafka(["analytics-kafka, KRaft<br/>conversation_events, 12 partitions"])
+        jm["analytics-flink-jobmanager"]
+        tm["analytics-flink-taskmanager"]
+        flink["flink_job.py + flink_sql.py<br/>1-minute event-time tumbling rollup"]
+        rollup(["flink-conversation-events<br/>rollup topic"])
+        consumer["consumer.py<br/>batched inserts, at-least-once"]
+        ch[("analytics-clickhouse")]
+        ingest["20_kafka_ingest.sql<br/>Kafka engine table + MV"]
+        ringest["21_flink_rollup_ingest.sql<br/>rollup ingest + MV"]
+        prod[("10_production.sql<br/>conversation_events ReplacingMergeTree,<br/>monthly parts, bloom filters, TTL")]
+        mvs[("mv_conversation_daily, mv_agent_hourly,<br/>mv_platform_daily")]
+        api["analytics-api, api.py<br/>/v1/accounts/id/summary, agent-latency,<br/>hourly, intents; /v1/conversations/id; /metrics"]
+        bench[["benchmarks/<br/>bench_clickhouse, bench_partitioning, bench_api"]]
+        staged["clickhouse/00..06_*.sql<br/>staged schemas, one variable each"]
+    end
+    pinecone["pinecone_deployment<br/>indexes the same conversations"]
+    producer --> kafka
+    kafka --> ingest --> prod
+    kafka --> consumer --> prod
+    kafka --> flink
+    jm --> flink
+    tm --> flink
+    flink -->|"exactly-once checkpoints"| rollup
+    rollup --> ringest --> ch
+    ingest --> ch
+    prod --> mvs
+    mvs -->|"p95 target 100 ms"| api
+    bench -.->|"measures"| staged
+    staged -.->|"informs"| prod
+    producer -.-> pinecone
+```
+
+- The Kafka-engine route (`20_kafka_ingest.sql`) exists because `flink-connector-jdbc` ships no ClickHouse dialect; the Flink rollup lands through its own Kafka-engine table (`21_flink_rollup_ingest.sql`).
+- The staged schemas `00` to `06` are the measured tuning journey below; `10_production.sql` is what the API serves from.
+
+
 ```
    AI agent runtime (simulated)
              │

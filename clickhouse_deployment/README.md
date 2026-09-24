@@ -7,6 +7,46 @@ two shards coordinated by `clickhouse-keeper`, a `Distributed` table layered
 over `ReplicatedMergeTree`, and four analytical queries that fan out and run
 concurrently on both nodes.
 
+## Architecture
+
+A real two-shard cluster with a keeper, a Distributed table over ReplicatedMergeTree, and the loader and queries that use it.
+
+```mermaid
+flowchart LR
+    api{{"web_server_code<br/>GET /impression csv.gz"}}
+    subgraph module["clickhouse_deployment"]
+        loader["load_data.py<br/>clickhouse-connect"]
+        schema["init/schema.sql<br/>ON CLUSTER impressions_cluster"]
+        keeper["clickhouse-keeper"]
+        s1[("clickhouse-01<br/>impressions_local, ReplicatedMergeTree")]
+        s2[("clickhouse-02<br/>impressions_local, ReplicatedMergeTree")]
+        dist[("default.impressions<br/>Distributed")]
+        q1["queries/funnel_analysis.sql"]
+        q2["queries/page_type_summary.sql"]
+        q3["queries/user_engagement.sql"]
+        q4["queries/hourly_traffic.sql"]
+        deploy["deploy.sh<br/>up, schema, load-data, query"]
+        tests[["tests<br/>chdb embedded + mocked loader"]]
+    end
+    deploy --> schema
+    schema --> s1
+    schema --> s2
+    keeper --- s1
+    keeper --- s2
+    dist --> s1
+    dist --> s2
+    api -->|"csv.gz"| loader
+    loader -->|"INSERT"| dist
+    q1 --> dist
+    q2 --> dist
+    q3 --> dist
+    q4 --> dist
+    tests -.->|"same SQL"| q1
+```
+
+- The four queries mirror the dbt analysis models, so the numbers can be checked across engines.
+- Tests run the analytical SQL against embedded ClickHouse (`chdb`), so no cluster is needed to run them.
+
 ## Why this enables concurrent, distributed queries
 
 - **Two shards** (`clickhouse-01`, `clickhouse-02`) each hold part of the data

@@ -19,6 +19,54 @@ running the `pgvector/pgvector:pg15` image.
 ./deploy.sh bench-embed && ./deploy.sh bench-scale && ./deploy.sh bench-load   # the measurements below
 ```
 
+## Architecture
+
+The governed path from the dbt gold models to an agent: stage roles, blue-green promotion, the pgvector catalog, and an MCP server with no SQL tool.
+
+```mermaid
+flowchart LR
+    subgraph dbtmod["dbt_deployment"]
+        analytics[("public_analytics<br/>four dbt analysis models")]
+        manifest["target/manifest.json<br/>target/catalog.json"]
+    end
+    subgraph pg["PostgreSQL, pgvector image"]
+        promote["gold_ops.promote()<br/>SECURITY DEFINER, schema swap"]
+        rollback["gold_ops.rollback()"]
+        releases[("gold_ops.releases<br/>log, retention")]
+        gold[("gold<br/>active release schema")]
+        prev[("gold_release_N<br/>three retained")]
+        entries[("catalog.entries<br/>vector(384), HNSW")]
+    end
+    subgraph module["mcp_deployment"]
+        roles["sql/001_roles.sql<br/>ingestion, transform, promotion, mcp_reader"]
+        catalog["catalog.py<br/>entries from dbt + templates, sync by hash"]
+        tmpl["templates/*.yaml<br/>lint, typed params, cap, timeout"]
+        server["server.py FastMCP gold_mcp<br/>search, list, describe, describe table, run"]
+        pool["service.py<br/>psycopg pool as mcp_reader"]
+        embed["embeddings.py<br/>hash or MiniLM"]
+    end
+    agent{{"MCP client<br/>Claude Code or any stdio client"}}
+    roles --> pg
+    analytics -->|"promotion role"| promote
+    promote --> gold
+    promote --> releases
+    gold -.->|"rename"| prev
+    prev -.->|"rollback"| rollback --> gold
+    manifest --> catalog
+    tmpl --> catalog
+    catalog -->|"transform role"| entries
+    embed --> catalog
+    embed --> server
+    agent -->|"stdio, five tools"| server
+    server --> pool
+    pool -->|"SELECT only"| gold
+    pool -->|"cosine search"| entries
+    tmpl -->|"the only runnable SQL"| server
+```
+
+- There is no edge from the agent to SQL: the server exposes templates by name, binds parameters server-side, and connects as a role that can read gold and the catalog only.
+- Promotion never copies at swap time; it renames schemas in one transaction, and rollback is the rename in reverse.
+
 ---
 
 ## Four pieces

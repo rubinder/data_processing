@@ -4,6 +4,52 @@ Deploys Apache Airflow 2.11.1 locally using Docker. The deployment includes a we
 
 ## Architecture
 
+How the Airflow stack schedules the impression pipeline and hands Spark work to the local cluster or EMR.
+
+```mermaid
+flowchart LR
+    subgraph module["airflow_deployment"]
+        sched["airflow-scheduler"]
+        web["airflow-webserver<br/>localhost:8080"]
+        init["airflow-init<br/>migrations, admin user"]
+        meta[("postgres<br/>Airflow metadata")]
+        pipe["impression_pipeline<br/>hourly, catchup, mapped over page_types"]
+        qc["impression_quality_checks<br/>Dataset-triggered freshness + volume"]
+        hw_local["hello_world_local_spark"]
+        hw_emr["hello_world_emr_spark"]
+        ds[("dags/datasets.py<br/>Dataset outlets")]
+    end
+    subgraph exec["Execution targets"]
+        local["local_spark_deployment<br/>spark-master:7077"]
+        emr{{"AWS EMR<br/>aws_deployment"}}
+    end
+    subgraph code["spark_applications"]
+        api_pull["api_pull.py"]
+        agg["aggregation.py"]
+    end
+    marquez["lineage_deployment<br/>Marquez"]
+    init --> meta
+    sched --> meta
+    web --> meta
+    sched --> pipe
+    sched --> hw_local
+    sched --> hw_emr
+    pipe -->|"spark-submit"| local
+    pipe -->|"EMR step"| emr
+    hw_local --> local
+    hw_emr --> emr
+    local --> api_pull
+    local --> agg
+    emr --> api_pull
+    pipe -->|"outlets"| ds
+    ds -->|"triggers"| qc
+    sched -.->|"OpenLineage provider"| marquez
+```
+
+- The pipeline DAG is backfillable: idempotent date/hour parameters, retries with backoff, an SLA and a failure callback; `RUNBOOK.md` covers reprocessing.
+- The dashed edge is opt-in and gated on `OPENLINEAGE_URL`.
+
+
 - **Dockerfile**: Builds a custom Airflow image with Java 17, PySpark 3.5.4, and providers for Apache Spark and AWS.
 - **docker-compose.yaml**: Orchestrates the following services:
   - `postgres` - PostgreSQL 15 metadata database

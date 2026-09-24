@@ -31,6 +31,55 @@ pinecone_deployment/
 └── deploy.sh              # up | down | test | bench | load | api
 ```
 
+## Architecture
+
+Corpus, embedders and the store on the left; Pinecone Local or hosted Pinecone on the right; the API, evaluation and migration on top.
+
+```mermaid
+flowchart LR
+    subgraph module["pinecone_deployment"]
+        conv["conversations.py<br/>synthetic corpus, labelled intents"]
+        emb["embeddings.py<br/>hash / sentence-transformers / pinecone"]
+        sparse["sparse.py<br/>HashedBm25, hybrid_scale"]
+        store["store.py ConversationStore<br/>namespace or filter isolation"]
+        rerank["rerank.py<br/>LexicalReranker / PineconeReranker"]
+        api["api.py FastAPI, vector-api container :8090<br/>/similar-conversations, /suggest-resolution"]
+        pointer[("ActiveIndex pointer<br/>ACTIVE_INDEX_FILE")]
+        migrate["migrate.py<br/>shadow index, DualWriter, cut_over"]
+        evaluate["evaluate.py<br/>recall@k, intent precision@k, freshness"]
+        bench["benchmarks/run_local.py"]
+        tests[["tests/<br/>20 pytest"]]
+    end
+    subgraph local["Pinecone Local, docker-compose.yaml"]
+        emulator["pinecone-local container<br/>ghcr.io/pinecone-io/pinecone-local :5080"]
+        idx[("index conversations<br/>one namespace per account + __meta__")]
+    end
+    subgraph cloud["hosted Pinecone, PINECONE_API_KEY"]
+        serverless{{"serverless index<br/>dotproduct for hybrid"}}
+        inference{{"Pinecone Inference<br/>multilingual-e5-large, bge-reranker-v2-m3"}}
+    end
+    conv -->|"Conversation"| store
+    emb -->|"dense vectors"| store
+    sparse -.->|"sparse_values"| store
+    store -->|"upsert, query, delete"| emulator
+    emulator --- idx
+    store -.->|"same client"| serverless
+    emb -.->|"EMBEDDER=pinecone"| inference
+    rerank -.->|"PineconeReranker"| inference
+    api -->|"search"| store
+    api -.->|"rerank=true"| rerank
+    pointer -.->|"active index name"| api
+    migrate -->|"shadow index, dual write"| store
+    migrate -->|"cut_over"| pointer
+    evaluate -->|"labelled queries"| store
+    bench -->|"evaluate, time_upserts"| evaluate
+    tests -.->|"Pinecone Local"| store
+```
+
+- `deploy.sh load` wires `conversations.generate` through `make_embedder` into `ConversationStore.upsert`; ids are `account_id:conversation_id`, so re-loads are in-place.
+- Dashed edges are cloud-only: hosted embedding, hosted reranking and the serverless index need `PINECONE_API_KEY`; without it the API falls back to `LexicalReranker`.
+- `migrate.py` backfills the shadow index from the conversations, never from the old vectors, and the API reads the `ActiveIndex` pointer on each request.
+
 ## Quick start
 
 ```bash
