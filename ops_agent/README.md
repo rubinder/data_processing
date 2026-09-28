@@ -174,7 +174,7 @@ that violates the contract leaves the previous good table in place
 
 **One engine protocol, two implementations.** Production is Spark 3.5 over the
 Iceberg catalog `iceberg_deployment` configures (local filesystem or REST on
-MinIO, chosen by `ICEBERG_CATALOG_TYPE`). The fast tests run the same rules and
+an S3 gateway, chosen by `ICEBERG_CATALOG_TYPE`). The fast tests run the same rules and
 the same monitor SQL through an in-memory engine backed by DuckDB. That pair
 caught a real dialect difference before it reached production: Spark types
 `sum(...) * 1.0 / count(*)` as `DECIMAL(38,16)`, DuckDB as `DOUBLE`; the engine

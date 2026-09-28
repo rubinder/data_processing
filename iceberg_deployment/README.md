@@ -15,7 +15,7 @@ Everything here is verified by **22 tests that run against real Iceberg tables**
 ```bash
 ./deploy.sh test     # 22 tests, local filesystem catalog
 ./deploy.sh demo     # the full walkthrough, printed as it happens
-./deploy.sh up       # REST catalog + MinIO, the production-shaped deployment
+./deploy.sh up       # REST catalog + S3 gateway, the production-shaped deployment
 ```
 
 ## Architecture
@@ -39,13 +39,13 @@ flowchart LR
     subgraph catalogs["Catalogs, chosen by ICEBERG_CATALOG_TYPE"]
         hadoop[("hadoop<br/>local filesystem warehouse")]
         rest["iceberg-rest<br/>tabulario/iceberg-rest, 8181"]
-        minio[("iceberg-minio<br/>S3 API, console 9101")]
+        s3[("iceberg-s3<br/>versitygw, S3 API :9100")]
     end
     ops["ops_agent<br/>watches db.impressions"]
     deploy --> demo
     deploy --> tests
     session --> hadoop
-    session --> rest --> minio
+    session --> rest --> s3
     imp --> table
     demo --> imp
     demo --> evo
@@ -60,7 +60,7 @@ flowchart LR
     table --> ops
 ```
 
-- The filesystem catalog needs no services and is what the tests use; the REST catalog on MinIO is the production shape because it owns commit atomicity on object storage.
+- The filesystem catalog needs no services and is what the tests use; the REST catalog on the S3 gateway is the production shape because it owns commit atomicity on object storage.
 
 ---
 
@@ -221,7 +221,7 @@ export ICEBERG_CATALOG_TYPE=rest
 ```bash
 ./deploy.sh test     # 22 tests against real Iceberg tables (~2 min)
 ./deploy.sh demo     # the six-step walkthrough
-./deploy.sh up       # REST catalog :8181 + MinIO console :9101
+./deploy.sh up       # REST catalog :8181 + S3 API :9100
 ./deploy.sh down
 ```
 
@@ -242,7 +242,7 @@ successfully. `session.py` pins both to `sys.executable`.
 iceberg_deployment/
 ├── README.md
 ├── deploy.sh                     lifecycle, demo, tests
-├── docker-compose.yaml           Iceberg REST catalog + MinIO
+├── docker-compose.yaml           Iceberg REST catalog + versitygw S3 gateway
 ├── pyproject.toml
 ├── iceberg_deployment/
 │   ├── session.py                catalog config: hadoop | rest
@@ -260,7 +260,4 @@ iceberg_deployment/
 **Verified on this machine:** all 22 tests and the full demo, against Spark
 3.5.4, Iceberg 1.6.1, Java 17, using the filesystem catalog.
 
-**Not verified:** the `docker-compose.yaml` REST-catalog-on-MinIO path. The
-configuration is written and the code path is exercised by the same
-`session.py` used everywhere else, but the containers have not been started
-here. Treat that stack as a starting point rather than a tested deployment.
+**Verified on 2026-09-27:** the `docker-compose.yaml` REST-catalog path. [`../trino_deployment`](../trino_deployment/) created `db.impressions` through the REST catalog and this module's Spark session, in `ICEBERG_CATALOG_TYPE=rest` mode, read it back: 3,000 rows and 13 snapshots, the same table from two engines. The object store is now `versity/versitygw`; MinIO stopped publishing container images and both the Docker Hub and quay.io references fail to resolve.

@@ -95,13 +95,13 @@ Complete the following under different folders
         - [x] Self-contained README documenting the measured tuning journey, ClickHouse vs Redshift reasoning, partitioning and materialized view strategy, SLOs/runbook, and the negative results
 
     - [x] Iceberg Deployment under iceberg_deployment (Apache Iceberg table format on Spark 3.5)
-        - [x] session.py with two catalogs: filesystem (no services, used by tests) and REST-on-S3/MinIO (production shape); pins PYSPARK_PYTHON to sys.executable so venv driver/worker versions cannot diverge
+        - [x] session.py with two catalogs: filesystem (no services, used by tests) and REST-on-S3 (versitygw gateway; production shape); pins PYSPARK_PYTHON to sys.executable so venv driver/worker versions cannot diverge
         - [x] Iceberg table over the impression event model with hidden partitioning (days(event_ts), page_type) and format-version 2 merge-on-read
         - [x] schema_evolution.py: documented compatibility policy (safe: add/rename/drop/reorder/widen; rejected: narrowing, nullable->required, unrelated type change) plus partition-spec evolution
         - [x] time_travel.py: snapshot listing, VERSION/TIMESTAMP AS OF, rollback_to_snapshot, cherrypick for write-audit-publish
         - [x] upserts.py: MERGE INTO composed from the live schema (survives renames), idempotent replay, row-level DELETE
         - [x] maintenance.py: rewrite_data_files compaction, rewrite_manifests, expire_snapshots with a retain floor, remove_orphan_files
-        - [x] demo.py six-step printed walkthrough; docker-compose (Iceberg REST + MinIO), deploy.sh, README, uv pyproject
+        - [x] demo.py six-step printed walkthrough; docker-compose (Iceberg REST + versitygw S3 gateway; MinIO images no longer published, replaced 2026-09-27), deploy.sh, README, uv pyproject
         - [x] 22 pytest tests against real Iceberg tables: rename preserves field ID and data, drop-then-re-add does not resurrect values, narrowing rejected, evolution rewrites zero data files, partition specs coexist, rollback restores state, MERGE replay idempotent, compaction reduces files while preserving records
 
 ---
@@ -215,3 +215,14 @@ set of approved query templates, and an MCP server that can run only those.
     - [x] Embedder comparison on a 24-question labelled set (2026-09-23): hashing 46% hit@1 / 38% on paraphrases, MiniLM 58% / 88%; within-kind search 79% vs 92%; misses are mostly a column outranking its table, not the wrong table (`benchmarks/results/embedders.md`)
     - [x] Scale to 10,000 templates through lint, pgvector sync, search and execution (2026-09-23): lint 0.6 ms/template, no-op re-sync 24 ms at 10k rows, search 0.7 ms once the planner uses HNSW; found and fixed stale statistics after bulk sync (ANALYZE in sync, transform owns the table) and enabled hnsw.iterative_scan for filtered searches (`benchmarks/results/scale.md`)
     - [x] Connection pool (psycopg_pool, MCP_POOL_SIZE default 8) and a concurrent-load measurement (2026-09-23): unpooled 491 calls/s and p95 24 ms at 8 callers, pooled 3,639 calls/s and p95 3 ms; a pool of 32 is no better on a laptop (`benchmarks/results/concurrency.md`)
+
+## Trino (added 2026-09-27)
+    - [x] `trino_deployment/`: Trino 476 coordinator with three catalogs: `iceberg` (REST catalog + native S3 to the versitygw gateway), `postgres_raw` (as `ingestion`), `postgres_gold` (as `mcp_reader`)
+    - [x] Seed `iceberg.db.impressions` from `postgres_raw.raw.impressions` in one `INSERT ... SELECT` with dbt's malformed-date rule (3,000 of 3,001 rows)
+    - [x] The four analyses in Trino SQL over Iceberg with dbt semantics; reconciliation query against `gold.page_type_summary`: 3 page types x 11 metrics, zero mismatches
+    - [x] Least privilege through federation (gold role denied on raw, raw role denied on gold), time travel via `$snapshots` / `FOR VERSION AS OF`, merge-on-read DELETE, pushdown shown as TableScan vs ScanFilterProject
+    - [x] Cross-engine: Spark in REST mode reads the table Trino wrote (3,000 rows, 13 snapshots); iceberg_deployment's REST path is now verified
+    - [x] Benchmark: Trino ~20 ms per statement over JDBC, 110-300 ms computing over Iceberg at 3,000 rows, native PostgreSQL 0.2 ms on the precomputed mart (`benchmarks/results/engines.md`)
+    - [x] Fixed on the way: MinIO images gone from Docker Hub and quay.io, Iceberg stack moved to `versity/versitygw` + `amazon/aws-cli` bucket init; PostgreSQL connector hides dbt's unbounded `numeric` until `decimal-mapping=allow_overflow`
+    - [x] 12 tests (5 unit, 7 against the stack), README with transcript, Planning.md, root README and diagram updated
+    - [ ] ClickHouse catalog over clickhouse_deployment; Trino as the engine behind mcp_deployment's templates so one template can read both stores
