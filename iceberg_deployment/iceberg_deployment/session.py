@@ -8,7 +8,7 @@ Two catalog modes, because they answer different questions:
             worth knowing: a filesystem catalog relies on atomic rename for
             commits, which object stores do not guarantee, so it is a
             development catalog and not a production one.
-``rest``    the Iceberg REST catalog against S3/MinIO, which is what
+``rest``    the Iceberg REST catalog against S3 (a versitygw gateway locally), which is what
             docker-compose.yaml starts. The REST catalog owns commit
             atomicity, so it works correctly on object storage and is the
             shape a real deployment takes.

@@ -1,0 +1,37 @@
+# Trino as a federated query engine over the stores this repository already
+# runs: the Iceberg REST catalog on an S3 gateway (../iceberg_deployment) and the
+# dbt PostgreSQL (../dbt_deployment). One coordinator that also schedules
+# work on itself; catalogs are property files under etc/catalog.
+#
+# Host port is 8085 because 8080 is Airflow and 8081 the local Spark UI.
+
+services:
+  trino:
+    image: trinodb/trino:476
+    container_name: trino
+    ports:
+      - "8085:8080"
+    volumes:
+      - ./etc/catalog:/etc/trino/catalog:ro
+    environment:
+      # Substituted into etc/catalog/*.properties via ${ENV:...}. The
+      # PostgreSQL catalogs connect as the stage roles from
+      # ../mcp_deployment/sql/001_roles.sql, so federation inherits the same
+      # least privilege: raw is readable through `ingestion`, gold through
+      # `mcp_reader`, and nothing else through either.
+      ICEBERG_S3_ACCESS_KEY: "${ICEBERG_S3_ACCESS_KEY:-iceberg}"
+      ICEBERG_S3_SECRET_KEY: "${ICEBERG_S3_SECRET_KEY:-icebergsecret}"
+      INGESTION_PASSWORD: "${INGESTION_PASSWORD:-ingestion}"
+      MCP_READER_PASSWORD: "${MCP_READER_PASSWORD:-mcp_reader}"
+    healthcheck:
+      test: ["CMD", "trino", "--execute", "SELECT 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    networks:
+      - data-processing-network
+
+networks:
+  data-processing-network:
+    external: true
+    name: data-processing-network

@@ -1,9 +1,14 @@
-# Iceberg REST catalog + MinIO (S3-compatible object storage).
+# Iceberg REST catalog + an S3-compatible object store.
 #
 # The tests use the filesystem ("hadoop") catalog, which needs no services but
 # relies on atomic rename for commits -- fine locally, unsafe on object stores.
 # This stack is the shape a real deployment takes: a REST catalog owns commit
 # atomicity, and storage is S3.
+#
+# The object store is versitygw (an S3 gateway over a POSIX directory). It
+# replaced MinIO in September 2026 when MinIO stopped publishing container
+# images on Docker Hub and quay.io; the catalog and the Spark session only
+# ever spoke S3 to it, so nothing else changed. There is no web console.
 #
 # Ports are offset from the other modules in this repo so it can run alongside
 # them on the shared data-processing-network.
@@ -15,57 +20,58 @@ services:
     ports:
       - "8181:8181"
     environment:
-      AWS_ACCESS_KEY_ID: "${MINIO_ROOT_USER:-minioadmin}"
-      AWS_SECRET_ACCESS_KEY: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      AWS_ACCESS_KEY_ID: "${ICEBERG_S3_ACCESS_KEY:-iceberg}"
+      AWS_SECRET_ACCESS_KEY: "${ICEBERG_S3_SECRET_KEY:-icebergsecret}"
       AWS_REGION: us-east-1
       CATALOG_WAREHOUSE: s3://warehouse/
       CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://iceberg-minio:9000
+      CATALOG_S3_ENDPOINT: http://iceberg-s3:9000
       CATALOG_S3_PATH__STYLE__ACCESS: "true"
     depends_on:
-      iceberg-minio:
-        condition: service_healthy
+      iceberg-s3-init:
+        condition: service_completed_successfully
     networks:
       - data-processing-network
 
-  iceberg-minio:
-    image: minio/minio:RELEASE.2024-09-13T20-26-02Z
-    container_name: iceberg-minio
-    hostname: iceberg-minio
-    command: server /data --console-address ":9101"
+  iceberg-s3:
+    image: versity/versitygw:v1.0.20
+    container_name: iceberg-s3
+    hostname: iceberg-s3
+    command: ["--access", "${ICEBERG_S3_ACCESS_KEY:-iceberg}",
+              "--secret", "${ICEBERG_S3_SECRET_KEY:-icebergsecret}",
+              "--port", ":9000", "posix", "/data"]
     ports:
       - "9100:9000"
-      - "9101:9101"
-    environment:
-      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
-      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
     volumes:
-      - iceberg-minio-data:/data
+      - iceberg-s3-data:/data
     networks:
       - data-processing-network
 
-  # One-shot: create the warehouse bucket the REST catalog expects.
-  iceberg-minio-init:
-    image: minio/mc:RELEASE.2024-09-16T17-43-14Z
+  # One-shot: create the warehouse bucket the REST catalog expects. Retries
+  # until the gateway answers, since the gateway image has no shell for a
+  # healthcheck of its own.
+  iceberg-s3-init:
+    image: amazon/aws-cli:2.22.35
     depends_on:
-      iceberg-minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://iceberg-minio:9000
-      $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin} &&
-      mc mb --ignore-existing local/warehouse &&
-      echo 'warehouse bucket ready'"
+      - iceberg-s3
+    environment:
+      AWS_ACCESS_KEY_ID: "${ICEBERG_S3_ACCESS_KEY:-iceberg}"
+      AWS_SECRET_ACCESS_KEY: "${ICEBERG_S3_SECRET_KEY:-icebergsecret}"
+      AWS_DEFAULT_REGION: us-east-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        for i in $(seq 1 30); do
+          aws --endpoint-url http://iceberg-s3:9000 s3 ls >/dev/null 2>&1 && break;
+          sleep 2;
+        done;
+        aws --endpoint-url http://iceberg-s3:9000 s3 mb s3://warehouse 2>/dev/null || true;
+        aws --endpoint-url http://iceberg-s3:9000 s3 ls s3://warehouse && echo 'warehouse bucket ready'
     networks:
       - data-processing-network
 
 volumes:
-  iceberg-minio-data:
+  iceberg-s3-data:
 
 networks:
   data-processing-network:

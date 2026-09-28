@@ -11,8 +11,8 @@ usage() {
     cat <<'EOF'
 Usage: ./deploy.sh <command>
 
-Lifecycle (REST catalog on S3/MinIO):
-  up          Start the Iceberg REST catalog and MinIO
+Lifecycle (REST catalog on S3, versitygw gateway):
+  up          Start the Iceberg REST catalog and the S3 gateway
   down        Stop and remove containers
   status      Show container status
   logs [svc]  Tail logs
@@ -23,7 +23,7 @@ Demos (local filesystem catalog -- no Docker required):
 
 Endpoints once up:
   REST catalog   http://localhost:8181
-  MinIO console  http://localhost:9101  (minioadmin / minioadmin)
+  S3 API         http://localhost:9100  (iceberg / icebergsecret; no console)
 EOF
     exit 1
 }
@@ -39,7 +39,7 @@ ensure_venv() {
 case "${1:-}" in
     up)
         docker compose up -d
-        echo "REST catalog: http://localhost:8181   MinIO: http://localhost:9101"
+        echo "REST catalog: http://localhost:8181   S3 API: http://localhost:9100"
         echo "Point Spark at it with:"
         echo "  export ICEBERG_CATALOG_TYPE=rest"
         ;;
