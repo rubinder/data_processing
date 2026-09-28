@@ -8,6 +8,8 @@ dependencies = [
     "pyyaml>=6.0",
     # 1.x: the FastMCP API. 2.x renamed it to MCPServer and changed call shapes.
     "mcp>=1.10.0,<2",
+    # Second execution engine for templates that read across stores.
+    "trino>=0.330.0",
 ]
 
 [project.optional-dependencies]
@@ -27,4 +29,5 @@ packages = ["mcp_deployment"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-markers = ["postgres: needs the dbt PostgreSQL (pgvector) from ../dbt_deployment running"]
+markers = ["postgres: needs the dbt PostgreSQL (pgvector) from ../dbt_deployment running",
+           "trino: needs ../trino_deployment running as well"]

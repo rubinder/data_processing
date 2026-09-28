@@ -21,9 +21,10 @@ PostgreSQL with ../dbt_deployment/deploy.sh up and apply the stage roles with
   status        Container status
   logs          Tail Trino logs
   cli           The Trino CLI inside the container
-  seed [mode]   Fill iceberg.db.impressions: postgres (default), synthetic, truncate
-  analyses      The four analyses over Iceberg
-  reconcile     Trino-over-Iceberg vs dbt gold, one query, per-metric deltas
+  seed [mode]   Fill iceberg.db.impressions: postgres (default), synthetic, truncate; clickhouse fills the cluster
+  clickhouse-reset  Flush the cluster's distributed queue and truncate both shards (Trino cannot)
+  analyses      The four analyses over Iceberg (add --clickhouse for the cluster)
+  reconcile     Iceberg vs dbt gold, one query, per-metric deltas (--clickhouse adds the cluster)
   timetravel    Snapshots, FOR VERSION AS OF, partitions
   pushdown      What is and is not pushed into PostgreSQL, with plans and timings
   bench         Engine comparison -> benchmarks/results/engines.md
@@ -50,8 +51,13 @@ case "${1:-}" in
     logs)     docker compose logs -f trino ;;
     cli)      docker exec -it trino trino ;;
     seed)     run trino_deployment.seed "${@:2}" ;;
+    clickhouse-reset)
+        docker exec clickhouse-01 clickhouse-client -q "SYSTEM FLUSH DISTRIBUTED default.impressions"
+        docker exec clickhouse-01 clickhouse-client -q "TRUNCATE TABLE default.impressions_local ON CLUSTER impressions_cluster" >/dev/null
+        echo "clickhouse: distributed queue flushed, both shards truncated"
+        ;;
     analyses) run trino_deployment.analyses "${@:2}" ;;
-    reconcile) run trino_deployment.federation ;;
+    reconcile) run trino_deployment.federation "${@:2}" ;;
     timetravel) run trino_deployment.timetravel ;;
     pushdown) run trino_deployment.pushdown ;;
     bench)    uv run --extra test python benchmarks/bench_engines.py "${@:2}" ;;

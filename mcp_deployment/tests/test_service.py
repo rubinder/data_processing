@@ -90,7 +90,8 @@ def test_mcp_tool_calls_return_json_and_errors_are_messages_not_exceptions():
                                     {"name": "funnel_by_page_type", "params": {"page_type": 9}}))
     assert "must be one of" in json.loads(_text(bad))["error"]
     listing = json.loads(_text(asyncio.run(mcp.call_tool("gold_list_templates", {}))))
-    assert listing["count"] == 5
+    assert listing["count"] == 7
+    assert {t["engine"] for t in listing["templates"]} == {"postgres", "trino"}
 
 
 def _text(result) -> str:

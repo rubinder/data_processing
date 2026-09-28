@@ -1,0 +1,37 @@
+name: reconcile_page_type_summary
+engine: trino
+description: >
+  Cross-engine check: impressions and unique users per page type as dbt
+  computed them in the gold table, next to the same numbers recomputed live
+  from the Iceberg lakehouse copy, with the deltas. Answers "does the gold
+  page type summary still agree with the lakehouse" and "has the warehouse
+  drifted from the lake".
+tags: [reconciliation, federation, iceberg, gold, page_type]
+params:
+  - name: page_type
+    type: int
+    description: Restrict to one page type (1, 2 or 3); NULL means every page type
+    required: false
+    choices: [1, 2, 3]
+returns: [page_type, gold_total_impressions, iceberg_total_impressions, delta_total_impressions, gold_unique_users, iceberg_unique_users, delta_unique_users]
+max_rows: 10
+timeout_ms: 10000
+sql: |
+  WITH lake AS (
+      SELECT page_type,
+             count(DISTINCT impression_id) AS total_impressions,
+             count(DISTINCT user_id)       AS unique_users
+      FROM iceberg.db.impressions
+      GROUP BY page_type
+  )
+  SELECT g.page_type,
+         g.total_impressions              AS gold_total_impressions,
+         l.total_impressions              AS iceberg_total_impressions,
+         g.total_impressions - l.total_impressions AS delta_total_impressions,
+         g.unique_users                   AS gold_unique_users,
+         l.unique_users                   AS iceberg_unique_users,
+         g.unique_users - l.unique_users  AS delta_unique_users
+  FROM postgres_gold.gold.page_type_summary g
+  LEFT JOIN lake l ON l.page_type = g.page_type
+  WHERE CAST(%(page_type)s AS integer) IS NULL OR g.page_type = %(page_type)s
+  ORDER BY g.page_type

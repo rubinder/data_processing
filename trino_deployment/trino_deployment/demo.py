@@ -21,6 +21,11 @@ def main() -> int:
     print(f"  inserted {n} rows; malformed-date rows skipped by try_cast")
     print(f"  table now holds {seed.row_count(conn)} rows")
 
+    print("\n=== 2b. seed clickhouse.default.impressions from the same raw rows, through Trino")
+    added = seed.clickhouse_from_postgres(conn)
+    print(f"  inserted {added} rows (0 means the cluster was already loaded); "
+          f"cluster now holds {seed.clickhouse_row_count(conn)} rows across two shards")
+
     print("\n=== 3. the four analyses over Iceberg, through Trino")
     for name in analyses.ANALYSES:
         result = analyses.run(name, conn)
@@ -29,16 +34,19 @@ def main() -> int:
     for row in summary.rows:
         print(f"    {row[:6]}")
 
-    print("\n=== 4. reconcile Trino-over-Iceberg against dbt gold in PostgreSQL, one query")
-    rows = federation.reconcile(conn)
-    bad = federation.mismatches(rows)
+    print("\n=== 4. reconcile Iceberg and ClickHouse against dbt gold in PostgreSQL, one query")
+    engines = ("iceberg", "clickhouse")
+    rows = federation.reconcile(conn, engines)
+    bad = federation.mismatches(rows, engines)
     for row in rows:
-        print(f"  page_type {row['page_type']}: total_impressions iceberg={row['iceberg_total_impressions']} "
-              f"gold={row['gold_total_impressions']}, pct_reaching_d iceberg={row['iceberg_pct_reaching_d']} "
-              f"gold={row['gold_pct_reaching_d']}")
-    print(f"  {len(rows)} page types x {len(federation.METRICS)} metrics: {len(bad)} mismatches")
-    for page_type, metric, delta in bad:
-        print(f"    page_type {page_type} {metric}: delta {delta}")
+        print(f"  page_type {row['page_type']}: total_impressions gold={row['gold_total_impressions']} "
+              f"iceberg={row['iceberg_total_impressions']} clickhouse={row['clickhouse_total_impressions']}; "
+              f"pct_reaching_d gold={row['gold_pct_reaching_d']} iceberg={row['iceberg_pct_reaching_d']} "
+              f"clickhouse={row['clickhouse_pct_reaching_d']}")
+    print(f"  {len(rows)} page types x {len(federation.METRICS)} metrics x {len(engines)} engines: "
+          f"{len(bad)} mismatches")
+    for page_type, engine, metric, delta in bad:
+        print(f"    page_type {page_type} {engine} {metric}: delta {delta}")
 
     print("\n=== 5. least privilege survives federation")
     for label, sql in (("gold role reading raw", "SELECT count(*) FROM postgres_gold.raw.impressions"),

@@ -6,13 +6,33 @@ from mcp_deployment import templates
 from mcp_deployment.templates import Param, Template, TemplateError, bind, build_query
 
 
-def test_the_shipped_templates_load_and_are_all_gold_only():
+def test_the_shipped_templates_load_and_read_only_allowed_sources():
     loaded = templates.load_templates()
     assert set(loaded) == {"funnel_by_page_type", "page_type_summary", "top_engaged_users",
-                           "hourly_traffic", "daily_conversion_trend"}
+                           "hourly_traffic", "daily_conversion_trend",
+                           "reconcile_page_type_summary", "clickhouse_daily_volume"}
     for t in loaded.values():
         assert t.description and t.returns
-        assert "gold." in t.sql
+        if t.engine == "postgres":
+            assert "gold." in t.sql and "iceberg." not in t.sql
+    assert {t.engine for t in loaded.values()} == {"postgres", "trino"}
+
+
+def test_trino_templates_may_read_gold_iceberg_and_clickhouse_but_never_raw():
+    ok = "SELECT * FROM postgres_gold.gold.t JOIN iceberg.db.i USING (x) JOIN clickhouse.default.c USING (x)"
+    templates.validate_template(_t(ok, engine="trino"))
+    with pytest.raises(TemplateError, match="postgres_raw.raw.impressions"):
+        templates.validate_template(_t("SELECT * FROM postgres_raw.raw.impressions", engine="trino"))
+    with pytest.raises(TemplateError, match="not one of"):
+        templates.validate_template(_t("SELECT * FROM iceberg.db.impressions"))   # postgres engine
+    with pytest.raises(TemplateError, match="unknown engine"):
+        templates.validate_template(_t("SELECT 1 FROM gold.t", engine="duckdb"))
+
+
+def test_named_placeholders_become_positional_markers_in_order():
+    from mcp_deployment.trino_engine import positional
+    sql, values = positional("SELECT %(a)s, %(b)s, %(a)s, '100%%'", {"a": 1, "b": "x"})
+    assert sql == "SELECT ?, ?, ?, '100%'" and values == [1, "x", 1]
 
 
 def _t(sql: str, params=(), **kw) -> Template:
@@ -24,8 +44,8 @@ def _t(sql: str, params=(), **kw) -> Template:
     ("DELETE FROM gold.funnel_analysis", (), "must start with SELECT or WITH"),
     ("SELECT * FROM gold.t WHERE a = %(a)s", (), "undeclared placeholder"),
     ("SELECT * FROM gold.t", (Param("a", "int"),), "declared but unused"),
-    ("SELECT * FROM raw.impressions", (), "not a gold.<table>"),
-    ("SELECT * FROM gold.t JOIN public_analytics.x USING (id)", (), "not a gold.<table>"),
+    ("SELECT * FROM raw.impressions", (), "not one of"),
+    ("SELECT * FROM gold.t JOIN public_analytics.x USING (id)", (), "not one of"),
     ("SELECT a % 2 FROM gold.t", (), "bare '%'"),
     ("SELECT * FROM gold.t WHERE a = %(a)s", (Param("a", "money"),), "unknown type"),
     ("SELECT * FROM gold.t WHERE a = %(a)s", (Param("a", "int", "x", required=False),),

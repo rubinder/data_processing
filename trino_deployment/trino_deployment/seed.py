@@ -18,6 +18,7 @@ from datetime import datetime
 from trino_deployment import client
 
 TABLE = "iceberg.db.impressions"
+CLICKHOUSE_TABLE = "clickhouse.default.impressions"
 
 CREATE_SCHEMA = "CREATE SCHEMA IF NOT EXISTS iceberg.db"
 
@@ -53,6 +54,39 @@ SELECT user_id,
 FROM postgres_raw.raw.impressions
 WHERE try_cast(date AS date) IS NOT NULL
 """
+
+
+# The same rows into the ClickHouse cluster's Distributed table, through the
+# ClickHouse connector: Trino writes to clickhouse-01, ClickHouse shards the
+# rows across both nodes. ClickHouse keeps the source's date/hour/minute/
+# second columns rather than one timestamp, so the analyses derive event_ts
+# from them when they read this source (see analyses.SOURCES).
+CLICKHOUSE_FROM_POSTGRES = f"""
+INSERT INTO {CLICKHOUSE_TABLE}
+SELECT user_id,
+       impression_id,
+       CAST(page_type AS smallint),
+       try_cast(date AS date),
+       CAST(hour AS smallint),
+       CAST(min AS smallint),
+       CAST(second AS smallint),
+       event_type
+FROM postgres_raw.raw.impressions
+WHERE try_cast(date AS date) IS NOT NULL
+"""
+
+
+def clickhouse_row_count(conn=None) -> int:
+    return client.query(f"SELECT count(*) FROM {CLICKHOUSE_TABLE}", conn).rows[0][0]
+
+
+def clickhouse_from_postgres(conn=None) -> int:
+    """Idempotent: the connector cannot truncate a Distributed table, so a
+    populated cluster is left alone and reported."""
+    existing = clickhouse_row_count(conn)
+    if existing:
+        return 0
+    return client.query(CLICKHOUSE_FROM_POSTGRES, conn).rows[0][0]
 
 
 def create(conn=None) -> None:
@@ -97,8 +131,13 @@ def main() -> int:
     elif mode == "truncate":
         truncate()
         print(f"seed: {TABLE} emptied")
+    elif mode == "clickhouse":
+        n = clickhouse_from_postgres()
+        print(f"seed: {n} rows from postgres_raw.raw.impressions -> {CLICKHOUSE_TABLE} "
+              f"(now {clickhouse_row_count()} rows)")
+        return 0
     else:
-        print("usage: python -m trino_deployment.seed [postgres | synthetic | truncate]")
+        print("usage: python -m trino_deployment.seed [postgres | synthetic | truncate | clickhouse]")
         return 2
     print(f"seed: {TABLE} now holds {row_count()} rows")
     return 0

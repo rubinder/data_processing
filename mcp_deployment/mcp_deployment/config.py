@@ -19,6 +19,16 @@ EMBEDDING_DIMENSION = 384
 
 STAGE_ROLES = ("ingestion", "transform", "promotion", "mcp_reader")
 
+#: Trino (../trino_deployment), the second template engine. The server
+#: connects as `mcp_reader`, which Trino's file access control makes
+#: read-only on every catalog.
+TRINO_HOST = os.environ.get("TRINO_HOST", "localhost")
+TRINO_PORT = int(os.environ.get("TRINO_PORT", "8085"))
+TRINO_USER = os.environ.get("TRINO_USER", "mcp_reader")
+#: What a Trino template may read: the promoted gold schema, the lakehouse
+#: table, the ClickHouse cluster. Never postgres_raw.
+TRINO_SOURCES = ("postgres_gold.gold.", "iceberg.db.", "clickhouse.default.")
+
 
 @dataclass(frozen=True)
 class Database:

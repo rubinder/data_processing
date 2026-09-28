@@ -96,7 +96,7 @@ def entries_from_templates(templates: dict[str, Template]) -> list[Entry]:
             description=t.description,
             content=f"query template {t.name}: {t.description} Parameters: {params}. "
                     f"Returns: {', '.join(t.returns) or 'see description'}. "
-                    f"Tags: {', '.join(t.tags)}."))
+                    f"Engine: {t.engine}. Tags: {', '.join(t.tags)}."))
     return entries
 
 

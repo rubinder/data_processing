@@ -14,7 +14,7 @@ running the `pgvector/pgvector:pg15` image.
 ```bash
 ../dbt_deployment/deploy.sh up && ../dbt_deployment/deploy.sh load-data --all && ../dbt_deployment/deploy.sh run
 ./deploy.sh demo     # apply roles + gold + catalog, promote, sync, search, run, prove denials, roll back
-./deploy.sh test     # 26 unit tests always; 8 PostgreSQL tests when the database is reachable
+./deploy.sh test     # 28 unit tests always; 8 PostgreSQL and 4 Trino tests when the stacks are reachable
 ./deploy.sh serve    # the MCP server on stdio, as mcp_reader
 ./deploy.sh bench-embed && ./deploy.sh bench-scale && ./deploy.sh bench-load   # the measurements below
 ```
@@ -43,8 +43,11 @@ flowchart LR
         tmpl["templates/*.yaml<br/>lint, typed params, cap, timeout"]
         server["server.py FastMCP gold_mcp<br/>search, list, describe, describe table, run"]
         pool["service.py<br/>psycopg pool as mcp_reader"]
+        tengine["trino_engine.py<br/>? binding, time limit, as mcp_reader"]
         embed["embeddings.py<br/>hash or MiniLM"]
     end
+    trino["trino_deployment<br/>read-only access control for mcp_reader"]
+    lake[("iceberg.db.impressions<br/>clickhouse.default.impressions")]
     agent{{"MCP client<br/>Claude Code or any stdio client"}}
     roles --> pg
     analytics -->|"promotion role"| promote
@@ -62,6 +65,9 @@ flowchart LR
     pool -->|"SELECT only"| gold
     pool -->|"cosine search"| entries
     tmpl -->|"the only runnable SQL"| server
+    server -->|"engine: trino"| tengine --> trino
+    trino -->|"SELECT only"| gold
+    trino -->|"SELECT only"| lake
 ```
 
 - There is no edge from the agent to SQL: the server exposes templates by name, binds parameters server-side, and connects as a role that can read gold and the catalog only.
@@ -151,9 +157,37 @@ The MCP server (`FastMCP`, stdio) exposes five read-only tools:
 | `gold_describe_table` | columns from the catalog, which templates read it, the active release |
 | `gold_run_template` | validated, bound, capped, timed execution as `mcp_reader` |
 
-Five shipped templates: `funnel_by_page_type`, `page_type_summary`,
-`top_engaged_users`, `hourly_traffic`, `daily_conversion_trend`. Adding one is
-one YAML file and a catalog sync.
+Seven shipped templates. Five run on PostgreSQL: `funnel_by_page_type`,
+`page_type_summary`, `top_engaged_users`, `hourly_traffic`,
+`daily_conversion_trend`. Two run on Trino and read across stores:
+`reconcile_page_type_summary` (gold in PostgreSQL against the Iceberg
+lakehouse, live) and `clickhouse_daily_volume` (the ClickHouse cluster).
+Adding one is one YAML file and a catalog sync.
+
+### A second engine: templates on Trino
+
+A template with `engine: trino` runs on [`../trino_deployment`](../trino_deployment/)
+instead of psycopg. Same YAML, same lint, same binding, same cap and
+timeout, one extra rule and one extra boundary:
+
+- The lint allows `FROM`/`JOIN` targets in `postgres_gold.gold.*`,
+  `iceberg.db.*` and `clickhouse.default.*` only. `postgres_raw` is not on
+  the list, so a template cannot reach the raw layer even though the
+  coordinator has that catalog.
+- The server connects to Trino as user `mcp_reader`, and Trino's file-based
+  access control makes that user read-only on every catalog. Trino here has
+  no authentication, so the user name is asserted rather than proven: the
+  rule is a guardrail on the server's own connection, not a security
+  boundary. Beneath `postgres_gold` the PostgreSQL role of the same name is
+  the boundary that does not depend on it.
+- `%(name)s` placeholders become Trino's positional `?` markers (a name used
+  twice binds twice); the statement runs under `query_max_execution_time`
+  and inside the same `LIMIT max_rows + 1` wrapper.
+
+`trino_engine.py` is the whole of it. The four Trino tests in
+`tests/test_trino_engine.py` run the two cross-store templates, prove the
+reader cannot `INSERT` through Trino, and turn a time limit into a template
+error.
 
 ---
 
@@ -253,13 +287,14 @@ every template to that.
 sql/001_roles.sql            stage roles and grants (idempotent)
 sql/002_gold_promotion.sql   gold, gold_ops.releases, promote(), rollback()
 sql/003_catalog.sql          pgvector extension, catalog.entries, HNSW index
-templates/*.yaml             the five approved queries
+templates/*.yaml             the seven approved queries (five on PostgreSQL, two on Trino)
 mcp_deployment/
   config.py      connections (admin + stage roles), paths, source schema
   db.py          psycopg helpers: apply sql/, rotate passwords
   embeddings.py  HashEmbedder (default), SentenceTransformerEmbedder (optional)
   catalog.py     entries from dbt artifacts + templates; rank(); sync(); search()
   templates.py   Template/Param, the lint, bind(), execute()
+  trino_engine.py the same templates on Trino: positional binding, query_max_execution_time
   promotion.py   promote / rollback / releases as the promotion role (+ CLI)
   service.py     GoldService: what the tools do, with injectable search/execute
   server.py      the FastMCP server; five tools, no SQL tool

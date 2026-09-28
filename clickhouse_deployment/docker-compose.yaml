@@ -18,11 +18,14 @@ services:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse-01
     hostname: clickhouse-01
+    environment:
+      CLICKHOUSE_TRINO_PASSWORD: "${CLICKHOUSE_TRINO_PASSWORD:-trino}"
     depends_on:
       - clickhouse-keeper
     volumes:
       - ./config/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
       - ./config/macros-01.xml:/etc/clickhouse-server/config.d/macros.xml
+      - ./config/users-trino.xml:/etc/clickhouse-server/users.d/trino.xml
       - clickhouse-01-data:/var/lib/clickhouse
     ports:
       - "8123:8123"
@@ -43,11 +46,14 @@ services:
     image: clickhouse/clickhouse-server:24.8
     container_name: clickhouse-02
     hostname: clickhouse-02
+    environment:
+      CLICKHOUSE_TRINO_PASSWORD: "${CLICKHOUSE_TRINO_PASSWORD:-trino}"
     depends_on:
       - clickhouse-keeper
     volumes:
       - ./config/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml
       - ./config/macros-02.xml:/etc/clickhouse-server/config.d/macros.xml
+      - ./config/users-trino.xml:/etc/clickhouse-server/users.d/trino.xml
       - clickhouse-02-data:/var/lib/clickhouse
     ports:
       - "8124:8123"

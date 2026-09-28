@@ -26,9 +26,31 @@ def seeded(conn):
     return n
 
 
-def test_the_three_catalogs_are_mounted(conn):
+def test_the_four_catalogs_are_mounted(conn):
     names = {r[0] for r in client.query("SHOW CATALOGS", conn).rows}
-    assert {"iceberg", "postgres_raw", "postgres_gold"} <= names
+    assert {"iceberg", "postgres_raw", "postgres_gold", "clickhouse"} <= names
+
+
+@pytest.fixture(scope="session")
+def clickhouse_seeded(conn, seeded):
+    try:
+        seed.clickhouse_from_postgres(conn)
+    except Exception as exc:  # noqa: BLE001 -- the cluster may simply be down
+        pytest.skip(f"ClickHouse not reachable through Trino: {str(exc)[:80]}")
+    return seed.clickhouse_row_count(conn)
+
+
+def test_clickhouse_holds_the_same_rows_and_analyses_run_over_it(conn, clickhouse_seeded):
+    assert clickhouse_seeded == seed.row_count(conn)
+    funnel = analyses.run("funnel_analysis", conn, source="clickhouse")
+    assert funnel.rows == analyses.run("funnel_analysis", conn).rows
+
+
+def test_three_engines_reconcile_exactly(conn, clickhouse_seeded):
+    engines = ("iceberg", "clickhouse")
+    rows = federation.reconcile(conn, engines)
+    assert len(rows) == 3
+    assert federation.mismatches(rows, engines) == []
 
 
 def test_seed_from_raw_lands_the_parseable_rows(conn, seeded):

@@ -33,6 +33,7 @@ FROM_TARGET = re.compile(r"\b(?:from|join)\s+([a-zA-Z_][\w.]*)", re.IGNORECASE)
 CTE_NAME = re.compile(r"(?:\bwith\b|,)\s*([a-zA-Z_]\w*)\s+as\s*\(", re.IGNORECASE)
 COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.DOTALL)
 PARAM_TYPES = ("int", "float", "str", "date", "bool")
+ENGINES = ("postgres", "trino")
 
 
 class TemplateError(Exception):
@@ -62,6 +63,10 @@ class Template:
     timeout_ms: int = 5000
     tags: tuple[str, ...] = ()
     source: str = ""
+    # "postgres": psycopg as mcp_reader, gold only. "trino": the Trino
+    # coordinator as mcp_reader, read-only by access control, over gold, the
+    # Iceberg table and ClickHouse -- the templates that read across stores.
+    engine: str = "postgres"
 
     def param(self, name: str) -> Param | None:
         return next((p for p in self.params if p.name == name), None)
@@ -103,14 +108,17 @@ def validate_template(t: Template) -> None:
     if declared - used:
         raise TemplateError(f"{where}: declared but unused parameter(s) "
                             f"{sorted(declared - used)}")
+    if t.engine not in ENGINES:
+        raise TemplateError(f"{where}: unknown engine '{t.engine}' (expected one of {ENGINES})")
+    allowed = (config.TRINO_SOURCES if t.engine == "trino" else (f"{config.GOLD_SCHEMA}.",))
     ctes = {m.lower() for m in CTE_NAME.findall(body)}
     for target in FROM_TARGET.findall(body):
         low = target.lower()
         if low in ctes:
             continue
-        if not low.startswith(f"{config.GOLD_SCHEMA}."):
-            raise TemplateError(f"{where}: reads '{target}', which is not a "
-                                f"{config.GOLD_SCHEMA}.<table> or a CTE of this template")
+        if not low.startswith(allowed):
+            raise TemplateError(f"{where}: reads '{target}', which is not one of "
+                                f"{list(allowed)} or a CTE of this template")
     for p in t.params:
         if p.type not in PARAM_TYPES:
             raise TemplateError(f"{where}: parameter '{p.name}' has unknown type "
@@ -153,7 +161,8 @@ def load_template(path: Path) -> Template:
         params=tuple(_param_from_yaml(p, where) for p in raw.get("params") or []),
         returns=tuple(raw.get("returns") or []),
         max_rows=int(raw.get("max_rows", 1000)), timeout_ms=int(raw.get("timeout_ms", 5000)),
-        tags=tuple(raw.get("tags") or []), source=Path(path).name)
+        tags=tuple(raw.get("tags") or []), source=Path(path).name,
+        engine=str(raw.get("engine", "postgres")))
     validate_template(template)
     return template
 
