@@ -1,0 +1,6 @@
+{
+  "catalogs": [
+    {"user": "mcp_reader", "catalog": ".*", "allow": "read-only"},
+    {"allow": "all"}
+  ]
+}

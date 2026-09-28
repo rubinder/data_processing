@@ -14,18 +14,29 @@ def test_seed_from_postgres_skips_unparseable_dates_like_dbt_does():
     assert "partitioning = ARRAY['day(event_ts)', 'page_type']" in seed.CREATE_TABLE
 
 
-def test_reconciliation_covers_every_gold_metric_from_both_sides():
-    sql = federation.reconciliation_sql()
-    assert "FULL OUTER JOIN postgres_gold.gold.page_type_summary" in sql
+def test_reconciliation_covers_every_gold_metric_for_every_engine():
+    sql = federation.reconciliation_sql(("iceberg", "clickhouse"))
+    assert "FROM postgres_gold.gold.page_type_summary g" in sql
+    assert "FULL OUTER JOIN iceberg_summary i" in sql and "FULL OUTER JOIN clickhouse_summary c" in sql
     for metric in federation.METRICS:
-        assert f"delta_{metric}" in sql and f"iceberg_{metric}" in sql and f"gold_{metric}" in sql
+        for e in ("iceberg", "clickhouse"):
+            assert f"delta_{e}_{metric}" in sql and f"{e}_{metric}" in sql
+        assert f"gold_{metric}" in sql
 
 
 def test_mismatches_reports_only_nonzero_or_missing_deltas():
-    rows = [{"page_type": 1, **{f"delta_{m}": 0.0 for m in federation.METRICS}},
-            {"page_type": 2, **{f"delta_{m}": 0.0 for m in federation.METRICS},
-             "delta_unique_users": 3.0, "delta_pct_reaching_f": None}]
-    assert federation.mismatches(rows) == [(2, "unique_users", 3.0), (2, "pct_reaching_f", None)]
+    rows = [{"page_type": 1, **{f"delta_iceberg_{m}": 0.0 for m in federation.METRICS}},
+            {"page_type": 2, **{f"delta_iceberg_{m}": 0.0 for m in federation.METRICS},
+             "delta_iceberg_unique_users": 3.0, "delta_iceberg_pct_reaching_f": None}]
+    assert federation.mismatches(rows) == [(2, "iceberg", "unique_users", 3.0),
+                                           (2, "iceberg", "pct_reaching_f", None)]
+
+
+def test_analyses_render_over_either_source():
+    for name in analyses.ANALYSES:
+        assert seed.TABLE in analyses.sql_for(name, "iceberg")
+        ch = analyses.sql_for(name, "clickhouse")
+        assert seed.CLICKHOUSE_TABLE in ch and seed.TABLE not in ch
 
 
 def test_plan_classifier_distinguishes_pushed_from_filtered_plans():

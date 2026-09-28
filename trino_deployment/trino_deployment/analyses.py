@@ -10,7 +10,21 @@ from __future__ import annotations
 import sys
 
 from trino_deployment import client
-from trino_deployment.seed import TABLE
+from trino_deployment.seed import CLICKHOUSE_TABLE, TABLE
+
+# Every analysis reads five columns from a source. Iceberg has them as-is;
+# ClickHouse kept the source's date/hour/minute/second and gets event_ts
+# derived on the way in. Same downstream SQL, two engines under it.
+SOURCES = {
+    "iceberg": TABLE,
+    "clickhouse": f"""(
+    SELECT user_id, impression_id, CAST(page_type AS integer) AS page_type,
+           CAST(date AS timestamp(6)) + hour * INTERVAL '1' HOUR
+               + minute * INTERVAL '1' MINUTE + second * INTERVAL '1' SECOND AS event_ts,
+           event_type
+    FROM {CLICKHOUSE_TABLE}
+) AS ch""",
+}
 
 AGGREGATED_CTE = f"""
 aggregated AS (
@@ -125,14 +139,23 @@ ANALYSES = {
 }
 
 
-def run(name: str, conn=None) -> client.Result:
-    return client.query(ANALYSES[name], conn)
+def sql_for(name: str, source: str = "iceberg") -> str:
+    """The analysis over ``source`` (``iceberg`` or ``clickhouse``)."""
+    if source not in SOURCES:
+        raise ValueError(f"unknown source {source!r}; expected one of {list(SOURCES)}")
+    return ANALYSES[name].replace(f"FROM {TABLE}", f"FROM {SOURCES[source]}")
+
+
+def run(name: str, conn=None, source: str = "iceberg") -> client.Result:
+    return client.query(sql_for(name, source), conn)
 
 
 def main() -> int:
-    names = sys.argv[1:] or list(ANALYSES)
+    args = sys.argv[1:]
+    source = "clickhouse" if "--clickhouse" in args else "iceberg"
+    names = [a for a in args if not a.startswith("--")] or list(ANALYSES)
     for name in names:
-        result = run(name)
+        result = run(name, source=source)
         print(f"== {name}: {len(result.rows)} rows")
         print("   " + " | ".join(result.columns))
         for row in result.rows[:8]:

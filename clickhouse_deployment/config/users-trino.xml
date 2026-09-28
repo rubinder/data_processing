@@ -1,0 +1,22 @@
+<clickhouse>
+    <!--
+        The image's own users.d/default-user.xml pins the `default` user to
+        localhost, so nothing else on the Docker network can authenticate:
+        not Trino (../trino_deployment), and not one shard talking to the
+        other for a Distributed query. This user is reachable from any
+        network and is what remote_servers in cluster.xml uses for the
+        shard-to-shard hop. The password is a development default; override
+        it with CLICKHOUSE_TRINO_PASSWORD in the environment of both nodes.
+    -->
+    <users>
+        <trino>
+            <password from_env="CLICKHOUSE_TRINO_PASSWORD"/>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>0</access_management>
+        </trino>
+    </users>
+</clickhouse>

@@ -156,9 +156,16 @@ def test_every_shipped_template_runs_with_only_its_required_parameters(admin, ca
     promotion.promote(role_conn("promotion"), candidate, "all templates")
     reader = role_conn("mcp_reader")
     sample = {"int": 1, "date": "2026-06-03", "str": "x", "float": 1.0, "bool": True}
+    from mcp_deployment import trino_engine
+    trino_up = trino_engine.reachable()
     for t in templates.load_templates().values():
         params = {p.name: (p.choices[0] if p.choices else sample[p.type])
                   for p in t.params if p.required}
-        result = templates.execute(reader, t, params)
+        if t.engine == "trino":
+            if not trino_up:
+                continue   # covered by tests/test_trino_engine.py when the stack is up
+            result = trino_engine.execute(t, params)
+        else:
+            result = templates.execute(reader, t, params)
         assert list(result.columns) == list(t.returns), t.name
         assert result.row_count >= 1, t.name

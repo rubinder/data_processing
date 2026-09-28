@@ -1,0 +1,38 @@
+name: clickhouse_daily_volume
+engine: trino
+description: >
+  Daily impression volume and unique users per page type from the ClickHouse
+  cluster, read through Trino. Answers "how many impressions per day did
+  page type 2 get in ClickHouse" and "which days were busiest".
+tags: [clickhouse, volume, daily, page_type, federation]
+params:
+  - name: page_type
+    type: int
+    description: Restrict to one page type (1, 2 or 3); NULL means every page type
+    required: false
+    choices: [1, 2, 3]
+  - name: days
+    type: int
+    description: How many most-recent days to include, 1 to 90
+    default: 7
+    min: 1
+    max: 90
+returns: [date, page_type, impressions, unique_users]
+max_rows: 270
+timeout_ms: 10000
+sql: |
+  WITH daily AS (
+      SELECT date, page_type,
+             count(DISTINCT impression_id) AS impressions,
+             count(DISTINCT user_id)       AS unique_users
+      FROM clickhouse.default.impressions
+      WHERE CAST(%(page_type)s AS integer) IS NULL OR page_type = %(page_type)s
+      GROUP BY date, page_type
+  ),
+  recent AS (
+      SELECT DISTINCT date FROM daily ORDER BY date DESC LIMIT %(days)s
+  )
+  SELECT d.date, d.page_type, d.impressions, d.unique_users
+  FROM daily d
+  JOIN recent r ON r.date = d.date
+  ORDER BY d.date, d.page_type

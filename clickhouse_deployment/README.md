@@ -7,6 +7,17 @@ two shards coordinated by `clickhouse-keeper`, a `Distributed` table layered
 over `ReplicatedMergeTree`, and four analytical queries that fan out and run
 concurrently on both nodes.
 
+## Users
+
+The image's own `users.d/default-user.xml` pins the `default` user to
+localhost, which is fine for `docker exec clickhouse-client` and for this
+module's loader, and useless for anything else on the Docker network,
+including one shard querying the other. `config/users-trino.xml` adds a
+`trino` user reachable from any network (password from
+`CLICKHOUSE_TRINO_PASSWORD`, default `trino`), and `cluster.xml` uses it for
+the shard-to-shard hop. [`../trino_deployment`](../trino_deployment/) mounts
+the cluster as a Trino catalog through that user.
+
 ## Architecture
 
 A real two-shard cluster with a keeper, a Distributed table over ReplicatedMergeTree, and the loader and queries that use it.

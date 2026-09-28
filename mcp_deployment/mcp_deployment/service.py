@@ -96,6 +96,7 @@ class GoldService:
     @staticmethod
     def _summary(t: Template) -> dict:
         return {"name": t.name, "description": t.description, "tags": list(t.tags),
+                "engine": t.engine,
                 "params": [f"{p.name}: {p.type}{'' if p.required else ' (optional)'}"
                            for p in t.params]}
 
@@ -137,6 +138,9 @@ def postgres_service(template_dir=None, embedder: Embedder | None = None,
             return catalog.search(conn, query, embedder, kinds, limit)
 
     def execute_fn(template, params):
+        if template.engine == "trino":
+            from mcp_deployment import trino_engine
+            return trino_engine.execute(template, params)
         with connection() as conn:
             return templates.execute(conn, template, params)
 

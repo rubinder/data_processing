@@ -5,6 +5,8 @@
         analytical queries fan out and execute concurrently on both nodes,
         with the initiator merging the partial aggregation states.
     -->
+    <!-- Shard-to-shard hops authenticate as the network-reachable user in
+         users-trino.xml; the image's default user is localhost-only. -->
     <remote_servers>
         <impressions_cluster>
             <shard>
@@ -12,6 +14,8 @@
                 <replica>
                     <host>clickhouse-01</host>
                     <port>9000</port>
+                    <user>trino</user>
+                    <password from_env="CLICKHOUSE_TRINO_PASSWORD"/>
                 </replica>
             </shard>
             <shard>
@@ -19,6 +23,8 @@
                 <replica>
                     <host>clickhouse-02</host>
                     <port>9000</port>
+                    <user>trino</user>
+                    <password from_env="CLICKHOUSE_TRINO_PASSWORD"/>
                 </replica>
             </shard>
         </impressions_cluster>

@@ -131,6 +131,8 @@ flowchart LR
     iceberg -->|"db.impressions"| ops
     iceberg -->|"REST catalog"| trino
     dbt -->|"raw + gold roles"| trino
+    ch -->|"trino user"| trino
+    trino -->|"engine: trino templates"| mcp
     dbz -->|"Avro topics"| flink
     rt --> pine
     spark -.->|"OpenLineage"| lineage
@@ -161,8 +163,8 @@ flowchart LR
 | [`clickhouse_deployment/`](clickhouse_deployment/) | Distributed ClickHouse: 2 shards + keeper, Distributed over ReplicatedMergeTree |
 | [`iceberg_deployment/`](iceberg_deployment/) | **Apache Iceberg** lakehouse tables on Spark 3.5: field-ID schema evolution, partition evolution, time travel and rollback, MERGE upserts, and compaction/expiry maintenance — 22 tests against real tables |
 | [`ops_agent/`](ops_agent/) | **Contracts-driven ops agent** over the Iceberg tables: YAML data contracts and feed configs, metadata-only sensors, monitors with persisted median/MAD baselines, arrival SLAs, a rules-first LangGraph agent that classifies schema drift by Iceberg field ID (a rename is one finding), throttled alerts, incidents, and a daily report with a day-over-day diff — 72 tests |
-| [`mcp_deployment/`](mcp_deployment/) | **Governed agent access to gold**: least-privilege Postgres roles per stage, blue-green promotion into `gold` with a release log and tested rollback, a pgvector catalog generated from the dbt manifest, pre-approved parameterized query templates, and a FastMCP server whose only tools search the catalog and run templates — no raw-SQL path exists |
-| [`trino_deployment/`](trino_deployment/) | **Trino** as a federated engine over the Iceberg REST catalog and the dbt PostgreSQL through the stage roles: lakehouse loaded from the warehouse in one statement, the four analyses reconciled against dbt gold in one query with zero mismatches, least privilege surviving federation, time travel, pushdown shown in the plan, Spark reading what Trino wrote |
+| [`mcp_deployment/`](mcp_deployment/) | **Governed agent access to gold**: least-privilege Postgres roles per stage, blue-green promotion into `gold` with a release log and tested rollback, a pgvector catalog generated from the dbt manifest, pre-approved parameterized query templates on PostgreSQL or on Trino across gold, Iceberg and ClickHouse, and a FastMCP server whose only tools search the catalog and run templates — no raw-SQL path exists |
+| [`trino_deployment/`](trino_deployment/) | **Trino** as a federated engine over the Iceberg REST catalog, the dbt PostgreSQL through the stage roles, and the ClickHouse cluster: lakehouse and cluster loaded from the warehouse in one statement each, the four analyses reconciled three ways against dbt gold with zero mismatches, least privilege surviving federation, read-only access control for the MCP reader, time travel, pushdown in the plan, Spark reading what Trino wrote |
 | [`duckdb_deployment/`](duckdb_deployment/) | DuckDB as an embedded, application-level OLAP engine behind FastAPI |
 | [`polars_deployment/`](polars_deployment/) | **Polars** as a single-node, in-process DataFrame engine: lazy plans over hive-partitioned Parquet, in-memory vs streaming execution, and a verified benchmark against eager reads and DuckDB that says when the Spark job fits on one machine |
 | [`pinecone_deployment/`](pinecone_deployment/) | **Pinecone** similar-conversation retrieval for the AI agent events: namespace vs filter tenant isolation, hybrid search, reranking, exact-kNN recall harness, embedding-model migration; measured on Pinecone Local, 20 tests |
