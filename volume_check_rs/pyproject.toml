@@ -1,0 +1,9 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "volume_check_rs"
+version = "0.1.0"
+description = "Fast volume anomaly detection for batch pipelines"
+requires-python = ">=3.10"
